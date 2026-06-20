@@ -1,11 +1,11 @@
-/**
- *******************************************************************************
+/*******************************************************************************
  * @file  iap.c
- * @brief This file provides firmware functions of IAP
+ * @brief This file provides firmware functions of IAP for I2C Bootloader
  @verbatim
    Change Logs:
    Date             Author          Notes
    2025-03-25       MADS            First version
+   2026-06-20       Claude          Use boot_param state machine for I2C IAP
  @endverbatim
  *******************************************************************************
  * Copyright (C) 2025, Xiaohua Semiconductor Co., Ltd. All rights reserved.
@@ -24,13 +24,15 @@
 #include "iap.h"
 #include "config_hc32l021.h"
 #include "modem.h"
+#include "boot_param.h"
+
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
 /*******************************************************************************
  * Local pre-processor symbols/macros ('#define')
  ******************************************************************************/
-/*******************************************************************************
+/******************************************************************************
  * Global variable definitions (declared in header file with 'extern')
  ******************************************************************************/
 /*******************************************************************************
@@ -38,11 +40,13 @@
  ******************************************************************************/
 static en_result_t IAP_JumpToApp(uint32_t u32Addr);
 static void        IAP_ResetConfig(void);
+
 /*******************************************************************************
  * Local variable definitions ('static')
  ******************************************************************************/
 static uint32_t   u32JumpAddress;
 static func_ptr_t pfnJumpToApplication;
+
 /*******************************************************************************
  * Function implementation - global ('extern') and local ('static')
  ******************************************************************************/
@@ -81,17 +85,41 @@ void IAP_Main(void)
 }
 
 /**
- * @brief  检查BootPara标记区数据值，判断是否需要升级APP程序
+ * @brief  检查Boot参数区状态，判断是否需要升级APP程序
  * @retval None
  */
 void IAP_UpdateCheck(void)
 {
-    uint32_t u32AppFlag;
+    stc_boot_param_t stcParam;
 
-    u32AppFlag = *(__IO uint32_t *)BOOT_PARA_ADDR; /* 读出BootLoader para区标记值 */
-    if (APP_FLAG != u32AppFlag)                    /* 如果标记值不等于APP_FLAG,表示不需要升级APP程序 */
+    BootParam_Read(&stcParam);
+
+    /* First power-on or corrupted parameter area: initialize and try jumping to APP */
+    if (stcParam.magic != BOOT_PARAM_MAGIC)
     {
-        IAP_JumpToApp(APP_ADDR); /* 直接跳转至APP */
+        BootParam_Init();
+        IAP_JumpToApp(APP_ADDR); /* If no valid APP, this returns Error and we continue */
+        return;
+    }
+
+    switch (stcParam.state)
+    {
+        case BOOT_PARAM_STATE_IMAGE_VALID:
+            /* Image verified OK: jump to APP directly */
+            IAP_JumpToApp(APP_ADDR);
+            break;
+
+        case BOOT_PARAM_STATE_EMPTY:
+            /* No update metadata; try jumping to existing APP */
+            IAP_JumpToApp(APP_ADDR);
+            break;
+
+        case BOOT_PARAM_STATE_UPDATE_REQUEST:
+        case BOOT_PARAM_STATE_IMAGE_PENDING:
+        case BOOT_PARAM_STATE_IMAGE_INVALID:
+        default:
+            /* Stay in Bootloader and wait for host I2C commands */
+            break;
     }
 }
 
