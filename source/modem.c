@@ -150,6 +150,12 @@ void MODEM_I2cIrqHandler(void)
         s_u8TxLenByteIdx     = 0u;
     }
 
+    /* Transmit ACK: must write STAR to release SCL after each ACK */
+    if (u32Flags & HSI2C_SLAVE_FLAG_TAF)
+    {
+        HSI2C->STAR = 0u;
+    }
+
     /* Receive data */
     if (u32Flags & HSI2C_SLAVE_FLAG_RDF)
     {
