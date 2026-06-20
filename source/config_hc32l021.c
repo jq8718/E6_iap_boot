@@ -24,6 +24,7 @@
 #include "config_hc32l021.h"
 #include "hsi2c.h"
 #include "gpio.h"
+#include "sysctrl.h"
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
@@ -41,8 +42,6 @@
 #define FLASH_TIMEOUT     (0xFFFFu)                                        /* FLASH超时保护计数值 */
 #define FLASH_END_ADDR    ((uint32_t)(FLASH_START_ADDR + FLASH_SIZE - 1u)) /* FLASH末尾地址 */
 
-/* I2C GPIO 复用配置值 */
-#define HSI2C_GPIO_LSEL         (0u)    /* GPIOAUX_CTRL1.HSI2C_LSEL=0 选择 PA06/PA07 位置 */
 
 /* FLASH写序列，每次FLASH寄存器修改，都需调用此序列 */
 #define FLASH_BYPASS() \
@@ -166,28 +165,19 @@ __STATIC_INLINE void HC32_SysClockDeInit(void)
  */
 __STATIC_INLINE void HC32_GpioInit(void)
 {
-    /* 外设模块时钟使能 */
-    SYSCTRL->PERI_CLKEN0_f.GPIO_EN = 1;
+    /* 开启 GPIO 外设时钟 */
+    SYSCTRL_PeriphClockEnable(PeriphClockGpio);
 
-    /* 选择 HSI2C 引脚位置为 PA06/PA07 */
-    SYSCTRL->PERI_CLKEN0_f.GPIO_EN = 1; /* 确保 GPIOAUX 时钟已开 */
-    GPIOAUX->CTRL1_f.HSI2C_LSEL = HSI2C_GPIO_LSEL;
-
-    /* 配置PA06为HSI2C_SDA：开漏输出 + 复用功能（外部上拉） */
-    /* 开漏输出模式下，HSI2C 硬件自动控制方向：发送时驱动低电平，接收时释放 */
-    GPIOA->DIR_f.PIN06 = 0;             /* 输出方向（开漏双向） */
-    GPIOA->OUT_f.PIN06 = 1;             /* 默认高 */
-    GPIOA->OD_f.PIN06  = 1;             /* 开漏 */
-    GPIOA->ADS_f.PIN06 = 0;             /* 数字功能 */
-    GPIO_PA06_AF_HSI2C_SDA();           /* 官方写法：PA06 AF1 = HSI2C_SDA */
-
-    /* 配置PA07为HSI2C_SCL：开漏输出 + 复用功能（外部上拉） */
-    /* SCL 平时由主机驱动，Clock Stretching 时 HSI2C 内部拉低，需开漏模式 */
-    GPIOA->DIR_f.PIN07 = 0;             /* 输出（开漏，HIGH = 释放） */
-    GPIOA->OUT_f.PIN07 = 1;             /* 默认高 */
-    GPIOA->OD_f.PIN07  = 1;             /* 开漏 */
-    GPIOA->ADS_f.PIN07 = 0;
-    GPIO_PA07_AF_HSI2C_SCL();           /* 官方写法：PA07 AF1 = HSI2C_SCL */
+    /* 配置 PA06(SDA)、PA07(SCL) 开漏输出 */
+    stc_gpio_init_t stcGpioInit = {0};
+    GPIO_StcInit(&stcGpioInit);
+    stcGpioInit.bOutputValue = TRUE;
+    stcGpioInit.u32Pin       = GPIO_PIN_06 | GPIO_PIN_07;
+    stcGpioInit.u32Mode      = GPIO_MD_OUTPUT_OD;
+    GPIOA_Init(&stcGpioInit);
+    /* 选择 HSI2C 复用功能 */
+    GPIO_PA06_AF_HSI2C_SDA();
+    GPIO_PA07_AF_HSI2C_SCL();
 }
 
 /**
@@ -196,11 +186,10 @@ __STATIC_INLINE void HC32_GpioInit(void)
  */
 __STATIC_INLINE void HC32_GpioDeInit(void)
 {
-    /* 外设模块时钟关闭 */
-    SYSCTRL->PERI_CLKEN0_f.GPIO_EN = 0;
-    /* 外设模块复位 */
-    SYSCTRL->PERI_RESET0_f.GPIO_RST = 0;
-    SYSCTRL->PERI_RESET0_f.GPIO_RST = 1;
+    /* 关闭 GPIO 外设时钟 */
+    SYSCTRL_PeriphClockDisable(PeriphClockGpio);
+    /* 复位 GPIO 模块 */
+    SYSCTRL_PeriphReset(PeriphResetGpio);
 }
 
 /**
@@ -211,8 +200,8 @@ void HC32_I2cSlaveInit(void)
 {
     stc_hsi2c_slave_init_t stcSlaveInit;
 
-    /* 外设模块时钟使能 */
-    SYSCTRL->PERI_CLKEN0_f.HSI2C_EN = 1;
+    /* 开启 HSI2C 外设时钟 */
+    SYSCTRL_PeriphClockEnable(PeriphClockHsi2c);
 
     /* 结构体默认值 */
     HSI2C_SlaveStcInit(&stcSlaveInit);
@@ -253,11 +242,10 @@ void HC32_I2cSlaveInit(void)
  */
 void HC32_I2cSlaveDeInit(void)
 {
-    /* 外设模块时钟关闭 */
-    SYSCTRL->PERI_CLKEN0_f.HSI2C_EN = 0;
-    /* 外设模块复位 */
-    SYSCTRL->PERI_RESET0_f.HSI2C_RST = 0;
-    SYSCTRL->PERI_RESET0_f.HSI2C_RST = 1;
+    /* 关闭 HSI2C 外设时钟 */
+    SYSCTRL_PeriphClockDisable(PeriphClockHsi2c);
+    /* 复位 HSI2C 模块 */
+    SYSCTRL_PeriphReset(PeriphResetHsi2c);
 }
 
 /**
