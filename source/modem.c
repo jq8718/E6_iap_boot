@@ -1,11 +1,11 @@
-/**
- *******************************************************************************
+/*******************************************************************************
  * @file  modem.c
- * @brief This file provides firmware functions of MODEM
+ * @brief This file provides firmware functions of MODEM for I2C IAP Bootloader
  @verbatim
    Change Logs:
    Date             Author          Notes
-   2025-03-25       MADS            First version
+   2025-03-25       MADS            First version (UART)
+   2026-06-20       Claude          Rewrite for I2C slave + virtual registers
  @endverbatim
  *******************************************************************************
  * Copyright (C) 2025, Xiaohua Semiconductor Co., Ltd. All rights reserved.
@@ -23,495 +23,677 @@
  ******************************************************************************/
 #include "modem.h"
 #include "config_hc32l021.h"
+#include "boot_param.h"
+
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
 /**
- * @brief  Packet status enumeration
+ * @brief  Command handler result
  */
-typedef enum
+typedef struct
 {
-    FRAME_RECV_IDLE_STATUS   = 0x00,
-    FRAME_RECV_HEADER_STATUS = 0x01,
-    FRAME_RECV_DATA_STATUS   = 0x02,
-    FRAME_RECV_PROC_STATUS   = 0x03,
-} en_frame_recv_status_t;
+    uint8_t  u8ErrCode;       /*!< Error code (0x00 = OK) */
+    uint8_t  au8Payload[16];  /*!< Response payload (excluding result code) */
+    uint16_t u16PayloadLen;   /*!< Length of response payload */
+} stc_cmd_result_t;
 
-/**
- * @brief  Packet status enumeration
- */
-typedef enum
-{
-    PACKET_ACK_OK               = 0x00,
-    PACKET_ACK_ERROR            = 0x01,
-    PACKET_ACK_ABORT            = 0x02,
-    PACKET_ACK_TIMEOUT          = 0x03,
-    PACKET_ACK_ADDR_ERROR       = 0x04,
-    PACKET_ACK_FLASH_SIZE_ERROR = 0x05,
-} en_packet_status_t;
-
-/**
- * @brief  Packet command enumeration
- */
-typedef enum
-{
-    PACKET_CMD_HANDSHAKE    = 0x20,
-    PACKET_CMD_JUMP_TO_APP  = 0x21,
-    PACKET_CMD_APP_DOWNLOAD = 0x22,
-    PACKET_CMD_APP_UPLOAD   = 0x23,
-    PACKET_CMD_ERASE_FLASH  = 0x24,
-    PACKET_CMD_CRC_FLASH    = 0x25,
-    PACKET_CMD_START_UPDATE = 0x26,
-} en_packet_cmd_t;
-
-/**
- * @brief  Packet command type enumeration
- */
-typedef enum
-{
-    PACKET_CMD_TYPE_CONTROL = 0x11,
-    PACKET_CMD_TYPE_DATA    = 0x12,
-} en_packet_cmd_type_t;
 /*******************************************************************************
  * Local pre-processor symbols/macros ('#define')
  ******************************************************************************/
-#define FRAME_HEAD_L 0x6Du
-#define FRAME_HEAD_H 0xACu
 
-/* Frame and packet size */
-#define FRAME_SHELL_SIZE             8
-#define PACKET_INSTRUCT_SEGMENT_SIZE 10
-#define PACKET_DATA_SEGMENT_SIZE     512
-#define FRAME_MIN_SIZE               PACKET_INSTRUCT_SEGMENT_SIZE
-#define FRAME_MAX_SIZE               (PACKET_DATA_SEGMENT_SIZE + PACKET_INSTRUCT_SEGMENT_SIZE + FRAME_SHELL_SIZE)
-
-/* Frame structure defines */
-#define FRAME_HEAD_H_INDEX 0x00
-#define FRAME_HEAD_L_INDEX 0x01
-#define FRAME_NUM_INDEX    0x02
-#define FRAME_XORNUM_INDEX 0x03
-#define FRAME_LENGTH_INDEX 0x04
-#define FRAME_PACKET_INDEX 0x06
-
-#define FRAME_RECV_TIMEOUT 5 /* ms */
-#define FRAME_NUM_XOR_BYTE 0xFF
-
-/* Packet structure defines */
-#define PACKET_CMD_INDEX       (FRAME_PACKET_INDEX + 0x00)
-#define PACKET_TYPE_INDEX      (FRAME_PACKET_INDEX + 0x01)
-#define PACKET_RESULT_INDEX    (FRAME_PACKET_INDEX + 0x01)
-#define PACKET_ADDRESS_INDEX   (FRAME_PACKET_INDEX + 0x02)
-#define PACKET_FLASH_CRC_INDEX (FRAME_PACKET_INDEX + 0x0A)
-#define PACKET_DATA_INDEX      (FRAME_PACKET_INDEX + PACKET_INSTRUCT_SEGMENT_SIZE)
-/*******************************************************************************
- * Global variable definitions (declared in header file with 'extern')
- ******************************************************************************/
 /*******************************************************************************
  * Local function prototypes ('static')
  ******************************************************************************/
-static void        MODEM_SendFrame(uint8_t *u8TxBuff, uint16_t u16TxLength);
-static uint16_t    MODEM_FlashPageNum(uint32_t u32Size);
-static void        MODEM_UartSendData(uint8_t *pu8TxBuff, uint16_t u16Length);
-static en_result_t MODEM_FlashEraseSector(uint32_t u32Addr);
-static en_result_t MODEM_FlashWriteBytes(uint32_t u32Addr, const uint8_t *pu8WriteBuff, uint32_t u32ByteLength);
-static void        MODEM_FlashReadBytes(uint32_t u32Addr, uint8_t *pu8ReadBuff, uint32_t u32ByteLength);
+static void MODEM_SetError(uint8_t u8ErrCode);
+static void MODEM_BuildResponse(uint8_t u8Cmd, uint8_t u8Seq, uint8_t u8ErrCode,
+                                const uint8_t *pu8Payload, uint16_t u16PayloadLen);
+
+static stc_cmd_result_t CmdHandshake(void);
+static stc_cmd_result_t CmdEraseFlash(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
+static stc_cmd_result_t CmdAppDownload(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
+static stc_cmd_result_t CmdCrcFlash(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
+static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
+
 /*******************************************************************************
  * Local variable definitions ('static')
  ******************************************************************************/
-static uint8_t  u8FrameData[FRAME_MAX_SIZE]; /* 帧存储缓存 */
-static uint32_t u32FrameDataIndex;           /* 帧存储缓存索引 */
-static uint32_t u32FrameSize;
+/* Virtual registers */
+static volatile uint8_t  s_u8RegStatus;     /*!< STATUS register (0x00) */
+static volatile uint8_t  s_u8RegError;      /*!< ERROR register (0x01) */
+static volatile uint16_t s_u16RegTxLen;     /*!< TX_LEN register (0x06) */
 
-static uint32_t               u32FrameRecvOverTime; /* 帧接收超时计数器，在(1ms)定时器中断中计数，在串口中断中清零 */
-static en_frame_recv_status_t enFrameRecvStatus;
+/* MAILBOX buffers */
+static uint8_t  s_au8RxMailbox[IAP_MAILBOX_SIZE]; /*!< Request frame buffer */
+static uint8_t  s_au8TxMailbox[IAP_MAILBOX_SIZE]; /*!< Response frame buffer */
+
+/* I2C transaction state */
+static volatile uint16_t s_u16RxMailboxIdx;   /*!< Current RX MAILBOX write offset */
+static volatile uint16_t s_u16TxMailboxIdx;   /*!< Current TX MAILBOX read offset */
+static volatile uint8_t  s_u8SubAddr;         /*!< Current sub-address */
+static volatile boolean_t s_bSubAddrValid;    /*!< Sub-address received in current transaction */
+static volatile boolean_t s_bTransactionActive; /*!< I2C transaction in progress */
+static volatile uint8_t  s_u8TxLenByteIdx;    /*!< TX_LEN byte index (0=low, 1=high) */
+
+/* Control flags set by ISR, consumed by MODEM_Process */
+static volatile boolean_t s_bCtrlCommit;
+static volatile boolean_t s_bCtrlClear;
+static volatile boolean_t s_bCtrlAbort;
+
+/* Jump to APP state */
+static volatile boolean_t s_bJumpPending;
+static volatile boolean_t s_bClearedAfterJump;
+
+/* 1ms tick counter (incremented by timer ISR) */
+static volatile uint32_t s_u32TickMs;
+
 /*******************************************************************************
  * Function implementation - global ('extern') and local ('static')
  ******************************************************************************/
-/**
- * @brief  应答帧处理
- * @param  [in] u8TxBuff 发送缓存指针
- * @param  [in] u16TxLength 待发送数据长度
- * @retval None
- */
-static void MODEM_SendFrame(uint8_t *u8TxBuff, uint16_t u16TxLength)
-{
-    uint16_t u16Crc16;
-
-    u8TxBuff[FRAME_LENGTH_INDEX]                   = u16TxLength & 0x00FF; /* 存储数据包长度 */
-    u8TxBuff[FRAME_LENGTH_INDEX + 1]               = u16TxLength >> 8;
-    u16Crc16                                       = HC32_CalCrc16(u8TxBuff, FRAME_PACKET_INDEX, u16TxLength); /* 计算数据包的CRC校验值 */
-    u8TxBuff[FRAME_PACKET_INDEX + u16TxLength]     = u16Crc16 & 0x00FF;                                        /* 存储CRC至数据包 */
-    u8TxBuff[FRAME_PACKET_INDEX + u16TxLength + 1] = u16Crc16 >> 8;
-    MODEM_UartSendData(&u8TxBuff[0], FRAME_PACKET_INDEX + u16TxLength + 2); /* 发送应答帧 */
-}
 
 /**
- * @brief  上位机数据帧解析及处理
- * @retval en_result_t
- *           - Ok: APP程序升级完成，并接受到跳转至APP命令
- *           - OperationInProgress: 数据处理中
- *           - Error: 通讯错误
- */
-en_result_t MODEM_Process(void)
-{
-    uint8_t  u8Cmd, u8FlashAddrValid, u8Cnt, u8Ret;
-    uint16_t u16DataLength, u16PageNum, u16Ret;
-    uint32_t u32FlashAddr, u32FlashLength, u32Temp;
-
-    if (enFrameRecvStatus == FRAME_RECV_PROC_STATUS) /* 有数据帧待处理, enFrameRecvStatus值在串口中断中调整 */
-    {
-        u8Cmd = u8FrameData[PACKET_CMD_INDEX];                      /* 获取帧指令码 */
-        if (PACKET_CMD_TYPE_DATA == u8FrameData[PACKET_TYPE_INDEX]) /* 如果是数据指令 */
-        {
-            u8FlashAddrValid = 0u;
-
-            u32FlashAddr = u8FrameData[PACKET_ADDRESS_INDEX] + /* 读取地址值 */
-                           (u8FrameData[PACKET_ADDRESS_INDEX + 1] << 8) + (u8FrameData[PACKET_ADDRESS_INDEX + 2] << 16)
-                           + (u8FrameData[PACKET_ADDRESS_INDEX + 3] << 24);
-            if ((u32FlashAddr >= (FLASH_START_ADDR + BOOT_SIZE)) && (u32FlashAddr < (FLASH_START_ADDR + FLASH_SIZE))) /* 如果地址值在有效范围内 */
-            {
-                u8FlashAddrValid = 1u; /* 标记地址有效 */
-            }
-        }
-
-        switch (u8Cmd) /* 根据指令码跳转执行 */
-        {
-            case PACKET_CMD_HANDSHAKE:                                          /* 握手帧 指令码 */
-                u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_OK;               /* 返回状态为：正确 */
-                MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE); /* 发送应答帧给上位机 */
-                break;
-            case PACKET_CMD_ERASE_FLASH:                     /* 擦除FLASH 指令码 */
-                if ((u32FlashAddr % FLASH_SECTOR_SIZE) != 0) /* 如果擦除地址不是页首地址 */
-                {
-                    u8FlashAddrValid = 0u; /* 标记地址无效 */
-                }
-
-                if (1u == u8FlashAddrValid) /* 如果地址有效 */
-                {
-                    u32Temp = u8FrameData[PACKET_DATA_INDEX] + /* 获取待擦除FLASH尺寸 */
-                              (u8FrameData[PACKET_DATA_INDEX + 1] << 8) + (u8FrameData[PACKET_DATA_INDEX + 2] << 16)
-                              + (u8FrameData[PACKET_DATA_INDEX + 3] << 24);
-                    u16PageNum = MODEM_FlashPageNum(u32Temp);    /* 计算需擦除多少页 */
-                    for (u8Cnt = 0; u8Cnt < u16PageNum; u8Cnt++) /* 根据需要擦除指定数量的扇区 */
-                    {
-                        u8Ret = MODEM_FlashEraseSector(u32FlashAddr + (u8Cnt * FLASH_SECTOR_SIZE));
-                        if (Ok != u8Ret) /* 如果擦除失败，反馈上位机错误代码 */
-                        {
-                            u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_ERROR;
-                            break;
-                        }
-                    }
-                    if (Ok == u8Ret) /* 如果全部擦除成功，反馈上位机成功 */
-                    {
-                        u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_OK;
-                    }
-                    else /* 如果擦除失败，反馈上位机错误超时标志 */
-                    {
-                        u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_TIMEOUT;
-                    }
-                }
-                else /* 地址无效，反馈上位机地址错误 */
-                {
-                    u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_ADDR_ERROR;
-                }
-                MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE); /* 发送应答帧到上位机 */
-                break;
-            case PACKET_CMD_APP_DOWNLOAD:   /* 数据下载 指令码 */
-                if (1u == u8FlashAddrValid) /* 如果地址有效 */
-                {
-                    u16DataLength = u8FrameData[FRAME_LENGTH_INDEX] + (u8FrameData[FRAME_LENGTH_INDEX + 1] << 8)
-                                    - PACKET_INSTRUCT_SEGMENT_SIZE; /* 获取数据包中的数据长度(不包含指令码指令类型等等) */
-                    if (u16DataLength > PACKET_DATA_SEGMENT_SIZE)   /* 如果数据长度大于最大长度 */
-                    {
-                        u16DataLength = PACKET_DATA_SEGMENT_SIZE; /* 设置数据最大值 */
-                    }
-                    u8Ret = MODEM_FlashWriteBytes(u32FlashAddr, (uint8_t *)&u8FrameData[PACKET_DATA_INDEX], u16DataLength); /* 把所有数据写入FLASH */
-                    if (Ok != u8Ret)                                                                                        /* 如果写数据失败 */
-                    {
-                        u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_ERROR; /* 反馈上位机错误 标志 */
-                    }
-                    else /* 如果写数据成功 */
-                    {
-                        u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_OK; /* 反馈上位机成功 标志 */
-                    }
-                }
-                else /* 如果地址无效 */
-                {
-                    u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_ADDR_ERROR; /* 反馈上位机地址错误 */
-                }
-                MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE); /* 发送应答帧到上位机 */
-                break;
-            case PACKET_CMD_CRC_FLASH:      /* 查询FLASH校验值 指令码 */
-                if (1u == u8FlashAddrValid) /* 如果地址有效 */
-                {
-                    u32FlashLength = u8FrameData[PACKET_DATA_INDEX] + (u8FrameData[PACKET_DATA_INDEX + 1] << 8) + (u8FrameData[PACKET_DATA_INDEX + 2] << 16)
-                                     + (u8FrameData[PACKET_DATA_INDEX + 3] << 24);         /* 获取待校验FLASH大小 */
-                    if ((u32FlashLength + u32FlashAddr) > (FLASH_START_ADDR + FLASH_SIZE)) /* 如果FLASH长度超出有效范围 */
-                    {
-                        u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_FLASH_SIZE_ERROR; /* 反馈上位机FLASH尺寸错误 */
-                    }
-                    else
-                    {
-                        u16Ret = HC32_CalCrc16(((unsigned char *)u32FlashAddr), 0, u32FlashLength); /* 读取FLASH指定区域的值并计算crc值 */
-                        u8FrameData[PACKET_FLASH_CRC_INDEX]     = (uint8_t)u16Ret;                  /* 把crc值存储到应答帧 */
-                        u8FrameData[PACKET_FLASH_CRC_INDEX + 1] = (uint8_t)(u16Ret >> 8);
-                        u8FrameData[PACKET_RESULT_INDEX]        = PACKET_ACK_OK; /* 反馈上位机成功 标志 */
-                    }
-                }
-                else /* 如果地址无效 */
-                {
-                    u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_ADDR_ERROR; /* 反馈上位机地址错误 */
-                }
-                MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE + 2); /* 发送应答帧到上位机 */
-                break;
-            case PACKET_CMD_JUMP_TO_APP:                                        /* 跳转至APP 指令码 */
-                MODEM_FlashEraseSector(BOOT_PARA_ADDR);                         /* 擦除BOOT parameter 扇区 */
-                u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_OK;               /* 反馈上位机成功 */
-                MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE); /* 发送应答帧到上位机 */
-                return Ok;                                                      /* APP更新完成，返回OK，接下来执行跳转函数，跳转至APP */
-            case PACKET_CMD_APP_UPLOAD:                                         /* 数据上传 */
-                if (1u == u8FlashAddrValid)                                     /* 如果地址有效 */
-                {
-                    u32Temp = u8FrameData[PACKET_DATA_INDEX] + (u8FrameData[PACKET_DATA_INDEX + 1] << 8) + (u8FrameData[PACKET_DATA_INDEX + 2] << 16)
-                              + (u8FrameData[PACKET_DATA_INDEX + 3] << 24); /* 读取上传数据长度 */
-                    if (u32Temp > PACKET_DATA_SEGMENT_SIZE)                 /* 如果数据长度大于最大值 */
-                    {
-                        u32Temp = PACKET_DATA_SEGMENT_SIZE; /* 设置数据长度为最大值 */
-                    }
-                    MODEM_FlashReadBytes(u32FlashAddr, (uint8_t *)&u8FrameData[PACKET_DATA_INDEX], u32Temp); /* 读FLASH数据 */
-                    u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_OK;                                        /* 反馈上位机成功 标志 */
-                    MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE + u32Temp);                /* 发送应答帧到上位机 */
-                }
-                else /* 如果地址无效 */
-                {
-                    u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_ADDR_ERROR;       /* 反馈上位机地址错误 标志 */
-                    MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE); /* 发送应答帧到上位机 */
-                }
-                break;
-            case PACKET_CMD_START_UPDATE:                                       /* 启动APP更新(此指令正常在APP程序中调用) */
-                u8FrameData[PACKET_RESULT_INDEX] = PACKET_ACK_OK;               /* 反馈上位机成功 标志 */
-                MODEM_SendFrame(&u8FrameData[0], PACKET_INSTRUCT_SEGMENT_SIZE); /* 发送应答帧到上位机 */
-                break;
-        }
-        enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧数据处理完成，帧接收状态恢复到空闲状态 */
-    }
-
-    return OperationInProgress; /* 返回，APP更新中 */
-}
-
-/**
- * @brief  串口中断，接收上位机发送帧
- * @retval None
- */
-void MODEM_UartIrqHandler(void)
-{
-    uint8_t  recvData;
-    uint16_t u16Crc16;
-
-    if (HC32_GetUartErrStatus()) /* 获取串口异常标志位 */
-    {
-        HC32_ClrUartErrStatus(); /* 清除串口异常标志位 */
-    }
-
-    if (HC32_GetUartRCStatus()) /* 获取串口数据接收标志位 */
-    {
-        HC32_ClrUartRCStatus(); /* 清除串口数据接收标志位 */
-
-        u32FrameRecvOverTime = 0;                  /* 帧接收超时计数器，清零 */
-        recvData             = HC32_GetUartBuff(); /* 获取串口接收数据 */
-        switch (enFrameRecvStatus)
-        {
-            case FRAME_RECV_IDLE_STATUS:      /* 当前处于空闲状态 */
-                if (recvData == FRAME_HEAD_L) /* 收到帧头第一个字节 */
-                {
-                    u8FrameData[FRAME_HEAD_H_INDEX] = recvData;                 /* 保存数据 */
-                    enFrameRecvStatus               = FRAME_RECV_HEADER_STATUS; /* 帧接收进入下一状态:  空闲状态 */
-                }
-                break;
-            case FRAME_RECV_HEADER_STATUS:    /* 当前处于接收帧头状态 */
-                if (recvData == FRAME_HEAD_H) /* 收到帧头第二个字节 */
-                {
-                    u8FrameData[FRAME_HEAD_L_INDEX] = recvData;               /* 保存数据 */
-                    u32FrameDataIndex               = FRAME_NUM_INDEX;        /* 数组下标从帧头的下一位置开始计数 */
-                    enFrameRecvStatus               = FRAME_RECV_DATA_STATUS; /* 帧接收进入下一状态:  接收帧数据状态 */
-                }
-                else if (recvData == FRAME_HEAD_L) /* 收到帧头第一个字节 */
-                {
-                    u8FrameData[FRAME_HEAD_H_INDEX] = recvData;                 /* 保存数据 */
-                    enFrameRecvStatus               = FRAME_RECV_HEADER_STATUS; /* 帧接收进入下一状态 */
-                }
-                else /* 数据错误 */
-                {
-                    enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧接收恢复到初始状态:  空闲状态 */
-                }
-                break;
-            case FRAME_RECV_DATA_STATUS: /* 当前处于接收帧数据状态 */
-                u8FrameData[u32FrameDataIndex++] = recvData;
-                if (u32FrameDataIndex == (FRAME_NUM_INDEX + 2)) /* 已经接收到数据帧序号及校验值 */
-                {
-                    if ((u8FrameData[FRAME_NUM_INDEX] != (u8FrameData[FRAME_XORNUM_INDEX] ^ FRAME_NUM_XOR_BYTE))) /* 数据帧序号及校验值不匹配 */
-                    {
-                        enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧接收恢复到初始状态 */
-                        return;                                     /* 错误返回 */
-                    }
-                }
-                else if (u32FrameDataIndex == (FRAME_LENGTH_INDEX + 2)) /* 已经收到包长度数据 */
-                {
-                    u32FrameSize = u8FrameData[FRAME_LENGTH_INDEX] + (u8FrameData[FRAME_LENGTH_INDEX + 1] << 8) + FRAME_SHELL_SIZE; /* 计算此帧的长度 */
-                    if ((u32FrameSize < FRAME_MIN_SIZE) || (u32FrameSize > FRAME_MAX_SIZE)) /* 帧长度不在有效范围内 */
-                    {
-                        enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧接收恢复到初始状态 */
-                        return;                                     /* 错误返回 */
-                    }
-                }
-                else if ((u32FrameDataIndex > (FRAME_LENGTH_INDEX + 2)) && (u32FrameDataIndex == u32FrameSize)) /* 帧数据接收完毕 */
-                {
-                    u16Crc16 = u8FrameData[u32FrameDataIndex - 2] + (u8FrameData[u32FrameDataIndex - 1] << 8);
-                    if (HC32_CalCrc16(u8FrameData, FRAME_PACKET_INDEX, (u32FrameSize - FRAME_SHELL_SIZE)) == u16Crc16) /* 如果CRC校验通过 */
-                    {
-                        enFrameRecvStatus = FRAME_RECV_PROC_STATUS; /* 帧接收进入下一状态:  帧处理状态 */
-                    }
-                    else /* 校验失败 */
-                    {
-                        enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧接收恢复到初始状态 */
-                        return;                                     /* 错误返回 */
-                    }
-                }
-                break;
-            case FRAME_RECV_PROC_STATUS: /* 当前处于帧处理状态 */
-                break;
-        }
-    }
-}
-
-/**
- * @brief  定时器中断函数，1ms中断一次，用于监测串口数据接收超时，及帧数据处理超时
- * @retval None
- */
-void MODEM_TimIrqHandler(void)
-{
-    if (HC32_GetTimUIFStatus()) /* 获取定时器溢出中断标志位 */
-    {
-        HC32_ClrTimUIFStatus(); /* 清除定时器溢出中断标志位 */
-
-        u32FrameRecvOverTime++;
-        if ((enFrameRecvStatus == FRAME_RECV_HEADER_STATUS) || (enFrameRecvStatus == FRAME_RECV_DATA_STATUS)) /* 处于帧接收过程中 */
-        {
-            if (u32FrameRecvOverTime++ > 10) /* 超过10ms没有收到到数据，异常 */
-            {
-                enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧接收恢复到初始状态 */
-            }
-        }
-        else if (enFrameRecvStatus == FRAME_RECV_PROC_STATUS) /* 处于帧处理状态 */
-        {
-            if (u32FrameRecvOverTime++ > 4500) /* 超过4.5s没有收到到数据，异常 (上位机超过5s没收到应答帧，会重发数据帧) */
-            {
-                enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧接收恢复到初始状态 */
-            }
-        }
-    }
-}
-
-/**
- * @brief  MODEM文件中相关变量参数初始化
+ * @brief  MODEM RAM variables init
  * @retval None
  */
 void MODEM_RamInit(void)
 {
+    s_u8RegStatus        = STATUS_IDLE;
+    s_u8RegError         = ERROR_CODE_OK;
+    s_u16RegTxLen        = 0u;
+    s_u16RxMailboxIdx    = 0u;
+    s_u16TxMailboxIdx    = 0u;
+    s_u8SubAddr          = 0u;
+    s_bSubAddrValid      = FALSE;
+    s_bTransactionActive = FALSE;
+    s_u8TxLenByteIdx     = 0u;
+    s_bCtrlCommit        = FALSE;
+    s_bCtrlClear         = FALSE;
+    s_bCtrlAbort         = FALSE;
+    s_bJumpPending       = FALSE;
+    s_bClearedAfterJump  = FALSE;
+    s_u32TickMs          = 0u;
+
+    (void)memset(s_au8RxMailbox, 0, sizeof(s_au8RxMailbox));
+    (void)memset(s_au8TxMailbox, 0, sizeof(s_au8TxMailbox));
+}
+
+/**
+ * @brief  1ms timer interrupt handler
+ * @retval None
+ */
+void MODEM_TimIrqHandler(void)
+{
+    if (HC32_GetTimUIFStatus())
+    {
+        HC32_ClrTimUIFStatus();
+        s_u32TickMs++;
+    }
+}
+
+/**
+ * @brief  I2C slave interrupt handler
+ * @retval None
+ */
+void MODEM_I2cIrqHandler(void)
+{
+    uint32_t u32Flags = HSI2C->SSR;
+
+    /* Address valid / repeated start: a transaction is active */
+    if (u32Flags & (HSI2C_SLAVE_FLAG_AVF | HSI2C_SLAVE_FLAG_RSF))
+    {
+        s_bTransactionActive = TRUE;
+        s_u8TxLenByteIdx     = 0u;
+        (void)HSI2C->SASR; /* Read SASR to clear AVF */
+    }
+
+    /* STOP: transaction ended */
+    if (u32Flags & HSI2C_SLAVE_FLAG_SDF)
+    {
+        s_bTransactionActive = FALSE;
+        s_bSubAddrValid      = FALSE;
+    }
+
+    /* Receive data */
+    if (u32Flags & HSI2C_SLAVE_FLAG_RDF)
+    {
+        uint8_t u8Data;
+        if (Ok == HSI2C_SlaveReadData(HSI2C, &u8Data))
+        {
+            if (!s_bSubAddrValid)
+            {
+                /* First byte after address is the sub-address */
+                s_u8SubAddr     = u8Data;
+                s_bSubAddrValid = TRUE;
+                if ((s_u8SubAddr >= REG_MAILBOX_START) && (s_u8SubAddr <= REG_MAILBOX_END))
+                {
+                    s_u16RxMailboxIdx = (uint16_t)(s_u8SubAddr - REG_MAILBOX_START);
+                    s_u16TxMailboxIdx = (uint16_t)(s_u8SubAddr - REG_MAILBOX_START);
+                }
+                else
+                {
+                    s_u16RxMailboxIdx = 0u;
+                    s_u16TxMailboxIdx = 0u;
+                }
+            }
+            else
+            {
+                /* Route data based on sub-address */
+                switch (s_u8SubAddr)
+                {
+                    case REG_CTRL:
+                        if (CTRL_COMMIT == u8Data)
+                        {
+                            if (STATUS_IDLE == s_u8RegStatus)
+                            {
+                                s_bCtrlCommit = TRUE;
+                            }
+                        }
+                        else if (CTRL_CLEAR == u8Data)
+                        {
+                            s_bCtrlClear = TRUE;
+                        }
+                        else if (CTRL_ABORT == u8Data)
+                        {
+                            s_bCtrlAbort = TRUE;
+                        }
+                        break;
+
+                    default:
+                        if ((s_u8SubAddr >= REG_MAILBOX_START) && (s_u8SubAddr <= REG_MAILBOX_END))
+                        {
+                            if (STATUS_IDLE == s_u8RegStatus)
+                            {
+                                if (s_u16RxMailboxIdx < IAP_MAILBOX_SIZE)
+                                {
+                                    s_au8RxMailbox[s_u16RxMailboxIdx++] = u8Data;
+                                }
+                            }
+                            /* Else: discard write when not IDLE */
+                            s_u8SubAddr++; /* Auto-increment virtual register address */
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    /* Transmit data */
+    if (u32Flags & HSI2C_SLAVE_FLAG_TDF)
+    {
+        uint8_t u8TxData = 0x00u;
+
+        switch (s_u8SubAddr)
+        {
+            case REG_STATUS:
+                u8TxData = s_u8RegStatus;
+                break;
+
+            case REG_ERROR:
+                u8TxData = s_u8RegError;
+                break;
+
+            case REG_TX_LEN:
+                if (0u == s_u8TxLenByteIdx)
+                {
+                    u8TxData         = (uint8_t)s_u16RegTxLen;
+                    s_u8TxLenByteIdx = 1u;
+                }
+                else
+                {
+                    u8TxData = (uint8_t)(s_u16RegTxLen >> 8);
+                }
+                break;
+
+            default:
+                if ((s_u8SubAddr >= REG_MAILBOX_START) && (s_u8SubAddr <= REG_MAILBOX_END))
+                {
+                    if (s_u16TxMailboxIdx < s_u16RegTxLen)
+                    {
+                        u8TxData = s_au8TxMailbox[s_u16TxMailboxIdx++];
+                    }
+                    else
+                    {
+                        u8TxData = 0x00u;
+                    }
+                    s_u8SubAddr++; /* Auto-increment virtual register address */
+                }
+                break;
+        }
+
+        HSI2C_SlaveWriteData(HSI2C, u8TxData);
+    }
+
+    /* Error flags: clear them */
+    if (u32Flags & (HSI2C_SLAVE_FLAG_FEF | HSI2C_SLAVE_FLAG_BEF))
+    {
+        HSI2C_SlaveFlagClear(HSI2C, HSI2C_SLAVE_FLAG_CLR_ALL);
+    }
+    else
+    {
+        HSI2C_SlaveFlagClear(HSI2C, u32Flags & HSI2C_SLAVE_FLAG_CLR_ALL);
+    }
+}
+
+/**
+ * @brief  Set error state
+ * @param  [in] u8ErrCode Error code
+ * @retval None
+ */
+static void MODEM_SetError(uint8_t u8ErrCode)
+{
+    s_u8RegStatus = STATUS_ERROR;
+    s_u8RegError  = u8ErrCode;
+}
+
+/**
+ * @brief  Build response frame in TX MAILBOX
+ * @param  [in] u8Cmd          Command code (echo)
+ * @param  [in] u8Seq          Sequence number (echo)
+ * @param  [in] u8ErrCode      Result code (Payload[0])
+ * @param  [in] pu8Payload     Additional response payload (Payload[1..])
+ * @param  [in] u16PayloadLen  Length of additional payload
+ * @retval None
+ */
+static void MODEM_BuildResponse(uint8_t u8Cmd, uint8_t u8Seq, uint8_t u8ErrCode,
+                                const uint8_t *pu8Payload, uint16_t u16PayloadLen)
+{
+    uint16_t u16TotalPayloadLen = 1u + u16PayloadLen; /* +1 for result code */
+    uint16_t u16CrcOffset;
+    uint16_t u16Crc;
+
+    s_au8TxMailbox[HDR_OFFSET_MAGIC0]     = FRAME_MAGIC0;
+    s_au8TxMailbox[HDR_OFFSET_MAGIC1]     = FRAME_MAGIC1;
+    s_au8TxMailbox[HDR_OFFSET_VERSION]    = IAP_PROTOCOL_VERSION;
+    s_au8TxMailbox[HDR_OFFSET_CMD]        = u8Cmd;
+    s_au8TxMailbox[HDR_OFFSET_SEQ]        = u8Seq;
+    s_au8TxMailbox[HDR_OFFSET_FLAGS]      = 0x00u;
+    s_au8TxMailbox[HDR_OFFSET_PAYLOADLEN] = (uint8_t)u16TotalPayloadLen;
+    s_au8TxMailbox[HDR_OFFSET_PAYLOADLEN + 1u] = (uint8_t)(u16TotalPayloadLen >> 8);
+
+    s_au8TxMailbox[HDR_OFFSET_PAYLOAD] = u8ErrCode;
+    if ((NULL != pu8Payload) && (u16PayloadLen > 0u))
+    {
+        (void)memcpy(&s_au8TxMailbox[HDR_OFFSET_PAYLOAD + 1u], pu8Payload, u16PayloadLen);
+    }
+
+    u16CrcOffset = IAP_HEADER_SIZE + u16TotalPayloadLen;
+    u16Crc       = (uint16_t)HC32_CalCrc16(s_au8TxMailbox, 0u, u16CrcOffset);
+
+    s_au8TxMailbox[u16CrcOffset]     = (uint8_t)u16Crc;
+    s_au8TxMailbox[u16CrcOffset + 1u] = (uint8_t)(u16Crc >> 8);
+
+    s_u16RegTxLen    = u16CrcOffset + IAP_CRC_SIZE;
+    s_u16TxMailboxIdx = 0u; /* Reset read index for host read */
+}
+
+/**
+ * @brief  MODEM process function, called in main loop
+ * @retval en_result_t
+ *           - Ok: Jump to APP requested
+ *           - OperationInProgress: Normal operation
+ */
+en_result_t MODEM_Process(void)
+{
+    /* Handle COMMIT */
+    if (s_bCtrlCommit)
+    {
+        s_bCtrlCommit = FALSE;
+
+        /* Basic frame size check */
+        if (s_u16RxMailboxIdx < IAP_FRAME_MIN)
+        {
+            MODEM_SetError(ERROR_CODE_FRAME);
+            return OperationInProgress;
+        }
+
+        uint16_t u16PayloadLen = (uint16_t)(s_au8RxMailbox[HDR_OFFSET_PAYLOADLEN] |
+                                            ((uint16_t)s_au8RxMailbox[HDR_OFFSET_PAYLOADLEN + 1u] << 8));
+        uint16_t u16FrameLen   = (uint16_t)(IAP_HEADER_SIZE + u16PayloadLen + IAP_CRC_SIZE);
+
+        if ((u16PayloadLen > IAP_PAYLOAD_MAX) || (u16FrameLen > IAP_FRAME_MAX) ||
+            (s_u16RxMailboxIdx < u16FrameLen))
+        {
+            MODEM_SetError(ERROR_CODE_FRAME);
+            return OperationInProgress;
+        }
+
+        /* Validate header */
+        if ((s_au8RxMailbox[HDR_OFFSET_MAGIC0] != FRAME_MAGIC0) ||
+            (s_au8RxMailbox[HDR_OFFSET_MAGIC1] != FRAME_MAGIC1) ||
+            (s_au8RxMailbox[HDR_OFFSET_VERSION] != IAP_PROTOCOL_VERSION) ||
+            (s_au8RxMailbox[HDR_OFFSET_FLAGS] != 0x00u))
+        {
+            MODEM_SetError(ERROR_CODE_FRAME);
+            return OperationInProgress;
+        }
+
+        /* Validate CRC */
+        uint16_t u16CrcOffset = (uint16_t)(IAP_HEADER_SIZE + u16PayloadLen);
+        uint16_t u16CrcRecv   = (uint16_t)(s_au8RxMailbox[u16CrcOffset] |
+                                           ((uint16_t)s_au8RxMailbox[u16CrcOffset + 1u] << 8));
+        uint16_t u16CrcCalc   = (uint16_t)HC32_CalCrc16(s_au8RxMailbox, 0u, u16CrcOffset);
+
+        if (u16CrcRecv != u16CrcCalc)
+        {
+            MODEM_SetError(ERROR_CODE_CRC);
+            return OperationInProgress;
+        }
+
+        /* Mark busy */
+        s_u8RegStatus = STATUS_BUSY;
+        s_u8RegError  = ERROR_CODE_OK;
+
+        uint8_t  u8Cmd  = s_au8RxMailbox[HDR_OFFSET_CMD];
+        uint8_t  u8Seq  = s_au8RxMailbox[HDR_OFFSET_SEQ];
+        uint8_t *pu8ReqPayload = &s_au8RxMailbox[HDR_OFFSET_PAYLOAD];
+        stc_cmd_result_t stcResult;
+
+        switch (u8Cmd)
+        {
+            case CMD_HANDSHAKE:
+                stcResult = CmdHandshake();
+                break;
+
+            case CMD_ERASE_FLASH:
+                stcResult = CmdEraseFlash(pu8ReqPayload, u16PayloadLen);
+                break;
+
+            case CMD_APP_DOWNLOAD:
+                stcResult = CmdAppDownload(pu8ReqPayload, u16PayloadLen);
+                break;
+
+            case CMD_CRC_FLASH:
+                stcResult = CmdCrcFlash(pu8ReqPayload, u16PayloadLen);
+                break;
+
+            case CMD_JUMP_TO_APP:
+                stcResult = CmdJumpToApp(pu8ReqPayload, u16PayloadLen);
+                break;
+
+            default:
+                stcResult.u8ErrCode     = ERROR_CODE_UNSUPPORTED;
+                stcResult.u16PayloadLen = 0u;
+                break;
+        }
+
+        MODEM_BuildResponse(u8Cmd, u8Seq, stcResult.u8ErrCode,
+                            stcResult.au8Payload, stcResult.u16PayloadLen);
+
+        if (ERROR_CODE_OK == stcResult.u8ErrCode)
+        {
+            s_u8RegStatus = STATUS_RESP_READY;
+        }
+        else
+        {
+            s_u8RegStatus = STATUS_ERROR;
+            s_u8RegError  = stcResult.u8ErrCode;
+        }
+    }
+
+    /* Handle CLEAR */
+    if (s_bCtrlClear)
+    {
+        s_bCtrlClear = FALSE;
+        if (STATUS_RESP_READY == s_u8RegStatus)
+        {
+            if (s_bJumpPending)
+            {
+                s_bClearedAfterJump = TRUE;
+            }
+            s_u8RegStatus = STATUS_IDLE;
+            s_u8RegError  = ERROR_CODE_OK;
+            s_u16RegTxLen = 0u;
+        }
+    }
+
+    /* Handle ABORT */
+    if (s_bCtrlAbort)
+    {
+        s_bCtrlAbort        = FALSE;
+        s_u8RegStatus       = STATUS_IDLE;
+        s_u8RegError        = ERROR_CODE_OK;
+        s_u16RegTxLen       = 0u;
+        s_bJumpPending      = FALSE;
+        s_bClearedAfterJump = FALSE;
+    }
+
+    /* Jump to APP after CLEAR */
+    if (s_bJumpPending && s_bClearedAfterJump)
+    {
+        s_bJumpPending      = FALSE;
+        s_bClearedAfterJump = FALSE;
+
+        /* Delay ~5ms per protocol */
+        uint32_t u32StartTick = s_u32TickMs;
+        while ((s_u32TickMs - u32StartTick) < 5u)
+        {
+            ;
+        }
+
+        return Ok;
+    }
+
+    return OperationInProgress;
+}
+
+/**
+ * @brief  HANDSHAKE command handler
+ * @retval stc_cmd_result_t
+ */
+static stc_cmd_result_t CmdHandshake(void)
+{
+    stc_cmd_result_t stcResult;
+
+    stcResult.u8ErrCode     = ERROR_CODE_OK;
+    stcResult.au8Payload[0] = IAP_PROTOCOL_VERSION;
+    stcResult.au8Payload[1] = (uint8_t)IAP_PAYLOAD_MAX;
+    stcResult.au8Payload[2] = (uint8_t)(IAP_PAYLOAD_MAX >> 8);
+    stcResult.u16PayloadLen = 3u;
+
+    return stcResult;
+}
+
+/**
+ * @brief  ERASE_FLASH command handler
+ * @param  [in] pu8Payload      Request payload
+ * @param  [in] u16PayloadLen   Request payload length
+ * @retval stc_cmd_result_t
+ */
+static stc_cmd_result_t CmdEraseFlash(const uint8_t *pu8Payload, uint16_t u16PayloadLen)
+{
+    stc_cmd_result_t stcResult;
+    uint32_t u32AppSize;
+    uint32_t u32SectorCount;
     uint32_t i;
 
-    enFrameRecvStatus = FRAME_RECV_IDLE_STATUS; /* 帧状态初始化为空闲状态 */
+    stcResult.u8ErrCode     = ERROR_CODE_OK;
+    stcResult.u16PayloadLen = 0u;
 
-    for (i = 0; i < FRAME_MAX_SIZE; i++)
+    if (u16PayloadLen != 4u)
     {
-        u8FrameData[i] = 0; /* 帧数据缓存初始化为零 */
+        stcResult.u8ErrCode = ERROR_CODE_FRAME;
+        return stcResult;
     }
 
-    u32FrameDataIndex = 0; /* 帧缓存数组索引值初始化为零 */
+    u32AppSize = ((uint32_t)pu8Payload[0]) |
+                 ((uint32_t)pu8Payload[1] << 8) |
+                 ((uint32_t)pu8Payload[2] << 16) |
+                 ((uint32_t)pu8Payload[3] << 24);
+
+    if ((u32AppSize == 0u) || (u32AppSize > (FLASH_SIZE - BOOT_SIZE)))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_ADDR;
+        return stcResult;
+    }
+
+    /* Power-loss protection: mark UPDATE_REQUEST before erasing */
+    if (Ok != BootParam_WriteState(BOOT_PARAM_STATE_UPDATE_REQUEST))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_FLASH;
+        return stcResult;
+    }
+
+    /* Erase required sectors */
+    u32SectorCount = (u32AppSize + FLASH_SECTOR_SIZE - 1u) / FLASH_SECTOR_SIZE;
+    for (i = 0u; i < u32SectorCount; i++)
+    {
+        if (Ok != HC32_FlashEraseSector(APP_ADDR + (i * FLASH_SECTOR_SIZE)))
+        {
+            stcResult.u8ErrCode = ERROR_CODE_FLASH;
+            return stcResult;
+        }
+    }
+
+    return stcResult;
 }
 
 /**
- * @brief  串口发送数据
- * @param  [in] pu8TxBuff 地址指针
- * @param  [in] u16Length 字节长度
- * @retval None
+ * @brief  APP_DOWNLOAD command handler
+ * @param  [in] pu8Payload      Request payload
+ * @param  [in] u16PayloadLen   Request payload length
+ * @retval stc_cmd_result_t
  */
-static void MODEM_UartSendData(uint8_t *pu8TxBuff, uint16_t u16Length)
+static stc_cmd_result_t CmdAppDownload(const uint8_t *pu8Payload, uint16_t u16PayloadLen)
 {
-    while (u16Length--)
+    stc_cmd_result_t stcResult;
+    uint32_t u32FlashAddr;
+    uint16_t u16DataLen;
+
+    stcResult.u8ErrCode     = ERROR_CODE_OK;
+    stcResult.u16PayloadLen = 0u;
+
+    if (u16PayloadLen < 4u)
     {
-        HC32_UartSendByte(*pu8TxBuff);
-        pu8TxBuff++;
+        stcResult.u8ErrCode = ERROR_CODE_FRAME;
+        return stcResult;
     }
+
+    u32FlashAddr = ((uint32_t)pu8Payload[0]) |
+                   ((uint32_t)pu8Payload[1] << 8) |
+                   ((uint32_t)pu8Payload[2] << 16) |
+                   ((uint32_t)pu8Payload[3] << 24);
+    u16DataLen   = u16PayloadLen - 4u;
+
+    if ((u32FlashAddr < APP_ADDR) ||
+        ((u32FlashAddr + u16DataLen) > (FLASH_START_ADDR + FLASH_SIZE)))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_ADDR;
+        return stcResult;
+    }
+
+    if (Ok != HC32_FlashWriteBytes(u32FlashAddr, (uint8_t *)&pu8Payload[4], u16DataLen))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_FLASH;
+        return stcResult;
+    }
+
+    return stcResult;
 }
 
 /**
- * @brief  FLASH扇区擦除
- * @param  [in] u32Addr 所擦除扇区内的地址
- * @retval en_result_t
- *           - Ok: 擦除成功
- *           - ErrorInvalidParameter: 无效参数
- *           - ErrorTimeout: 操作超时
+ * @brief  CRC_FLASH command handler
+ * @param  [in] pu8Payload      Request payload
+ * @param  [in] u16PayloadLen   Request payload length
+ * @retval stc_cmd_result_t
  */
-static en_result_t MODEM_FlashEraseSector(uint32_t u32Addr)
+static stc_cmd_result_t CmdCrcFlash(const uint8_t *pu8Payload, uint16_t u16PayloadLen)
 {
-    en_result_t enRet = Ok;
+    stc_cmd_result_t stcResult;
+    uint32_t u32AppSize;
+    uint16_t u16Crc;
 
-    if (u32Addr > (FLASH_START_ADDR + FLASH_SIZE)) /* 判断地址有效性 */
+    stcResult.u8ErrCode     = ERROR_CODE_OK;
+    stcResult.u16PayloadLen = 0u;
+
+    if (u16PayloadLen != 4u)
     {
-        return ErrorInvalidParameter;
+        stcResult.u8ErrCode = ERROR_CODE_FRAME;
+        return stcResult;
     }
 
-    if ((u32Addr % 4) != 0)
+    u32AppSize = ((uint32_t)pu8Payload[0]) |
+                 ((uint32_t)pu8Payload[1] << 8) |
+                 ((uint32_t)pu8Payload[2] << 16) |
+                 ((uint32_t)pu8Payload[3] << 24);
+
+    if ((u32AppSize == 0u) || (u32AppSize > (FLASH_SIZE - BOOT_SIZE)))
     {
-        u32Addr = (u32Addr / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
+        stcResult.u8ErrCode = ERROR_CODE_ADDR;
+        return stcResult;
     }
 
-    enRet = HC32_FlashEraseSector(u32Addr);
+    u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, u32AppSize);
 
-    return enRet;
+    /* Store app_size and app_crc to boot parameter area */
+    if (Ok != BootParam_WriteAppInfo(u32AppSize, u16Crc))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_FLASH;
+        return stcResult;
+    }
+
+    stcResult.au8Payload[0] = (uint8_t)u16Crc;
+    stcResult.au8Payload[1] = (uint8_t)(u16Crc >> 8);
+    stcResult.u16PayloadLen = 2u;
+
+    return stcResult;
 }
 
 /**
- * @brief  计算有多少sector页待擦除
- * @param  [in] u32Size 大小
- * @retval Sector number
+ * @brief  JUMP_TO_APP command handler
+ * @param  [in] pu8Payload      Request payload
+ * @param  [in] u16PayloadLen   Request payload length
+ * @retval stc_cmd_result_t
  */
-static uint16_t MODEM_FlashPageNum(uint32_t u32Size)
+static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16PayloadLen)
 {
-    uint16_t u32PageNum = u32Size / FLASH_SECTOR_SIZE;
+    stc_cmd_result_t stcResult;
+    stc_boot_param_t stcParam;
+    uint32_t u32StackTop;
+    uint16_t u16Crc;
 
-    if ((u32Size % FLASH_SECTOR_SIZE) != 0)
+    (void)pu8Payload;
+
+    stcResult.u8ErrCode     = ERROR_CODE_OK;
+    stcResult.u16PayloadLen = 0u;
+
+    if (u16PayloadLen != 0u)
     {
-        u32PageNum += 1u;
+        stcResult.u8ErrCode = ERROR_CODE_FRAME;
+        return stcResult;
     }
 
-    return u32PageNum;
+    BootParam_Read(&stcParam);
+
+    /* Boot self-verification: re-calculate CRC and compare */
+    u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, stcParam.app_size);
+    if (u16Crc != (uint16_t)stcParam.app_crc)
+    {
+        stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
+        return stcResult;
+    }
+
+    /* Vector table sanity check */
+    u32StackTop = *((volatile uint32_t *)APP_ADDR);
+    if ((u32StackTop < SRAM_BASE) || (u32StackTop > (SRAM_BASE + RAM_SIZE)))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
+        return stcResult;
+    }
+
+    /* Mark image as pending (single attempt, no retry) */
+    if (Ok != BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_PENDING))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_FLASH;
+        return stcResult;
+    }
+
+    /* Signal MODEM_Process to jump after host CLEAR */
+    s_bJumpPending      = TRUE;
+    s_bClearedAfterJump = FALSE;
+
+    return stcResult;
 }
 
-/**
- * @brief  FLASH写数据
- * @param  [in] u32Addr 写FLASH首地址
- * @retval en_result_t
- *           - Ok: 擦除成功
- *           - ErrorTimeout: 操作超时
- */
-static en_result_t MODEM_FlashWriteBytes(uint32_t u32Addr, const uint8_t *pu8WriteBuff, uint32_t u32ByteLength)
-{
-    return HC32_FlashWriteBytes(u32Addr, (uint8_t *)pu8WriteBuff, u32ByteLength);
-}
-
-/**
- * @brief  FLASH读数据
- * @param  [in] u32Addr 读首地址
- * @param  [in] *pu8ReadBuff 数据指针
- * @param  [in] u32ByteLength 数据长度
- * @retval None
- */
-static void MODEM_FlashReadBytes(uint32_t u32Addr, uint8_t *pu8ReadBuff, uint32_t u32ByteLength)
-{
-    HC32_FlashReadBytes(u32Addr, pu8ReadBuff, u32ByteLength);
-}
 /******************************************************************************
  * EOF (not truncated)
  *****************************************************************************/
