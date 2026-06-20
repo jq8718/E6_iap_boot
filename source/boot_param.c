@@ -127,7 +127,8 @@ en_result_t BootParam_WriteState(uint32_t u32State)
     stc_boot_param_t stcParam;
 
     BootParam_Read(&stcParam);
-    stcParam.state = u32State;
+    stcParam.magic  = BOOT_PARAM_MAGIC;   /* Always restore magic */
+    stcParam.state  = u32State;
     stcParam.header_crc = BootParam_CalcHeaderCrc(&stcParam);
 
     return BootParam_Write(&stcParam);
