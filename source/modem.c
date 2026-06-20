@@ -156,11 +156,8 @@ void MODEM_I2cIrqHandler(void)
                     s_u16RxMailboxIdx = (uint16_t)(s_u16SubAddr - REG_MAILBOX_START);
                     s_u16TxMailboxIdx = (uint16_t)(s_u16SubAddr - REG_MAILBOX_START);
                 }
-                else
-                {
-                    s_u16RxMailboxIdx = 0u;
-                    s_u16TxMailboxIdx = 0u;
-                }
+                /* else: non-MAILBOX registers (STATUS/ERROR/CTRL/TX_LEN)
+                 * leave rx/tx indices unchanged */
             }
             else
             {
