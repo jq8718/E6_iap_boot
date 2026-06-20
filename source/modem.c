@@ -347,6 +347,7 @@ en_result_t MODEM_Process(void)
         /* Basic frame size check */
         if (s_u16RxMailboxIdx < IAP_FRAME_MIN)
         {
+            MODEM_BuildResponse(0u, 0u, ERROR_CODE_FRAME, NULL, 0u);
             MODEM_SetError(ERROR_CODE_FRAME);
             return OperationInProgress;
         }
@@ -358,6 +359,9 @@ en_result_t MODEM_Process(void)
         if ((u16PayloadLen > IAP_PAYLOAD_MAX) || (u16FrameLen > IAP_FRAME_MAX) ||
             (s_u16RxMailboxIdx < u16FrameLen))
         {
+            uint8_t u8Cmd = s_au8RxMailbox[HDR_OFFSET_CMD];
+            uint8_t u8Seq = s_au8RxMailbox[HDR_OFFSET_SEQ];
+            MODEM_BuildResponse(u8Cmd, u8Seq, ERROR_CODE_FRAME, NULL, 0u);
             MODEM_SetError(ERROR_CODE_FRAME);
             return OperationInProgress;
         }
@@ -368,6 +372,9 @@ en_result_t MODEM_Process(void)
             (s_au8RxMailbox[HDR_OFFSET_VERSION] != IAP_PROTOCOL_VERSION) ||
             (s_au8RxMailbox[HDR_OFFSET_FLAGS] != 0x00u))
         {
+            uint8_t u8Cmd = s_au8RxMailbox[HDR_OFFSET_CMD];
+            uint8_t u8Seq = s_au8RxMailbox[HDR_OFFSET_SEQ];
+            MODEM_BuildResponse(u8Cmd, u8Seq, ERROR_CODE_FRAME, NULL, 0u);
             MODEM_SetError(ERROR_CODE_FRAME);
             return OperationInProgress;
         }
@@ -380,6 +387,9 @@ en_result_t MODEM_Process(void)
 
         if (u16CrcRecv != u16CrcCalc)
         {
+            uint8_t u8Cmd = s_au8RxMailbox[HDR_OFFSET_CMD];
+            uint8_t u8Seq = s_au8RxMailbox[HDR_OFFSET_SEQ];
+            MODEM_BuildResponse(u8Cmd, u8Seq, ERROR_CODE_CRC, NULL, 0u);
             MODEM_SetError(ERROR_CODE_CRC);
             return OperationInProgress;
         }
