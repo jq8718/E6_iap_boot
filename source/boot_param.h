@@ -59,6 +59,15 @@ typedef struct
 /* Boot pending retry max — single attempt (no auto-retry) */
 #define BOOT_PENDING_RETRY_MAX  (0u)
 
+/*===================================================================
+ *  Boot Parameter Area Initialization Policy
+ *===================================================================*/
+/* 0: Production — parameter area must be pre-programmed with bootloader.
+ *    If magic is invalid, stay in bootloader (do not auto-init).
+ * 1: Debug — auto-initialize parameter area when magic is invalid.
+ *    Useful during development when parameter area is erased. */
+#define BOOT_PARAM_AUTO_INIT    (0u)
+
 /*******************************************************************************
  * Global function prototypes (definition in C source)
  ******************************************************************************/

@@ -94,14 +94,13 @@ void IAP_UpdateCheck(void)
 
     BootParam_Read(&stcParam);
 
-    /* First power-on or corrupted parameter area: initialize and try jumping to APP */
+    /* Parameter area not initialized */
     if (stcParam.magic != BOOT_PARAM_MAGIC)
     {
+#if (BOOT_PARAM_AUTO_INIT == 1u)
         BootParam_Init();
-        if (Ok == IAP_JumpToApp(APP_ADDR))
-        {
-            return;
-        }
+#endif
+        /* Stay in bootloader — parameter area must be pre-programmed */
         return;
     }
 
@@ -113,20 +112,12 @@ void IAP_UpdateCheck(void)
                 uint16_t u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, stcParam.app_size);
                 if ((u16Crc != (uint16_t)stcParam.app_crc) || (Error == IAP_JumpToApp(APP_ADDR)))
                 {
-                    /* Verification or jump failed — mark invalid and stay in bootloader for recovery */
                     BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
                 }
             }
             break;
 
         case BOOT_PARAM_STATE_EMPTY:
-            /* No update metadata; try jumping to existing APP */
-            if (Error == IAP_JumpToApp(APP_ADDR))
-            {
-                /* No valid APP: stay in bootloader */
-            }
-            break;
-
         case BOOT_PARAM_STATE_UPDATE_REQUEST:
         case BOOT_PARAM_STATE_IMAGE_PENDING:
         case BOOT_PARAM_STATE_IMAGE_INVALID:
