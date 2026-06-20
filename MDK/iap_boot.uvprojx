@@ -275,7 +275,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x0</StartAddress>
-                <Size>0xe00</Size>
+                <Size>0x1000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -431,6 +431,11 @@
               <FileName>hsi2c.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\driver\src\hsi2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>ddl.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\driver\src\ddl.c</FilePath>
             </File>
           </Files>
         </Group>
