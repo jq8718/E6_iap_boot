@@ -30,25 +30,58 @@ stcSlaveInit.stcSlaveConfig1.u32FuncSelect =
 
 ---
 
-## 2. 虚拟寄存器
+	## 2. 虚拟寄存器
 
 Bootloader 作为 I2C 从机，通过 1 字节 sub-address 映射虚拟寄存器。
 
-### 2.1 寄存器表
+### 2.0 寄存器地址总表
 
-| 地址 | 名称 | 方向 | 字节数 | 说明 |
-|------|------|------|--------|------|
-| `0x00` | `STATUS` | R | 1 | Boot 当前状态 |
-| `0x01` | `ERROR` | R | 1 | 最近错误码 |
-| `0x02` | `CTRL` | W | 1 | 控制命令 |
-| `0x03` ~ `0x05` | *保留* | R/W | — | 读取返回 `0x00`，写入被忽略 |
-| `0x06` | `TX_LEN` | R | 2 | 响应帧长度，小端 |
-| `0x08` ~ `0x0F` | *保留* | R/W | — | 读取返回 `0x00`，写入被忽略 |
-| `0x20` ~ `0x231` | `MAILBOX` | W/R | 530 | 请求帧写入 / 响应帧读取 |
+| 地址 | 名称 | 方向 | 字节数 | 由谁读写 | 说明 |
+|------|------|------|--------|---------|------|
+| `0x00` | `REG_STATUS` | R | 1 | 主机读 | Boot 当前状态 |
+| `0x01` | `REG_ERROR` | R | 1 | 主机读 | 最近错误码 |
+| `0x02` | `REG_CTRL` | W | 1 | 主机写 | 控制命令（COMMIT/CLEAR/ABORT） |
+| `0x03`~`0x05` | *保留* | R | — | — | 读返回 `0x00`，写忽略 |
+| `0x06` | `REG_TX_LEN` | R | 2 LE | 主机读 | 响应帧长度（仅 `RESP_READY` 有效） |
+| `0x07`~`0x0F` | *保留* | R | — | — | 读返回 `0x00`，写忽略 |
+| `0x10`~`0x1F` | *保留* | R/W | — | — | 预留，当前无功能 |
+| `0x20`~`0x231` | `REG_MAILBOX` | W/R | 530 | 主机读写 | 请求帧写入 / 响应帧读取 |
 
-**MAILBOX 地址范围**：`0x20` = MAILBOX[0]，`0x21` = MAILBOX[1]，…，`0x231` = MAILBOX[529]。写入时地址自动增量——主机写入起始地址后，连续数据字节依次填充后续偏移。
+**实现代码定义**（`source/utils.h`）：
 
-### 2.2 STATUS
+```c
+/* 寄存器地址 */
+#define REG_STATUS        (0x00u)
+#define REG_ERROR         (0x01u)
+#define REG_CTRL          (0x02u)
+#define REG_TX_LEN        (0x06u)
+#define REG_MAILBOX_START (0x20u)
+#define REG_MAILBOX_END   (0x231u)
+
+/* STATUS 值 */
+#define STATUS_IDLE       (0x00u)
+#define STATUS_BUSY       (0x02u)
+#define STATUS_RESP_READY (0x03u)
+#define STATUS_ERROR      (0x04u)
+
+/* CTRL 值 */
+#define CTRL_COMMIT (0xA5u)
+#define CTRL_CLEAR  (0x5Au)
+#define CTRL_ABORT  (0xC3u)
+
+/* ERROR 码 */
+#define ERROR_CODE_OK          (0x00u)
+#define ERROR_CODE_CRC         (0x01u)
+#define ERROR_CODE_FRAME       (0x02u)
+#define ERROR_CODE_UNSUPPORTED (0x03u)
+#define ERROR_CODE_ADDR        (0x04u)
+#define ERROR_CODE_FLASH       (0x05u)
+#define ERROR_CODE_BUSY        (0x06u)
+#define ERROR_CODE_SEQ         (0x07u)
+#define ERROR_CODE_APP_INVALID (0x08u)
+```
+
+### 2.1 寄存器详解
 
 | 值 | 名称 | 说明 |
 |------|------|------|
@@ -424,7 +457,7 @@ S + SLA(W) + 0x20 +
   05           Seq
   00           Flags
   04 01        PayloadLen = 260 (= 4 + 256)
-  00 10 00 00  Payload[0:3] FlashAddr = 0x00001000
+  00 20 00 00  Payload[0:3] FlashAddr = 0x00002000
   [256 bytes]  Payload[4:259] 固件数据
   ## ##        CRC16
 + P
@@ -644,4 +677,4 @@ for (each sector) {
 
 ---
 
-*协议版本 0x01，最后更新 2026-06-16。*
+*协议版本 0x02，最后更新 2026-06-20。*
