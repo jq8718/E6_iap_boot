@@ -98,20 +98,30 @@ void IAP_UpdateCheck(void)
     if (stcParam.magic != BOOT_PARAM_MAGIC)
     {
         BootParam_Init();
-        IAP_JumpToApp(APP_ADDR); /* If no valid APP, this returns Error and we continue */
+        if (Ok == IAP_JumpToApp(APP_ADDR))
+        {
+            return;
+        }
         return;
     }
 
     switch (stcParam.state)
     {
         case BOOT_PARAM_STATE_IMAGE_VALID:
-            /* Image verified OK: jump to APP directly */
-            IAP_JumpToApp(APP_ADDR);
+            /* Image verified OK: try jumping to APP */
+            if (Error == IAP_JumpToApp(APP_ADDR))
+            {
+                /* Jump failed — mark invalid and stay in bootloader for recovery */
+                BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
+            }
             break;
 
         case BOOT_PARAM_STATE_EMPTY:
             /* No update metadata; try jumping to existing APP */
-            IAP_JumpToApp(APP_ADDR);
+            if (Error == IAP_JumpToApp(APP_ADDR))
+            {
+                /* No valid APP: stay in bootloader */
+            }
             break;
 
         case BOOT_PARAM_STATE_UPDATE_REQUEST:

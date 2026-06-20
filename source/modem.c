@@ -339,6 +339,12 @@ en_result_t MODEM_Process(void)
     {
         s_bCtrlCommit = FALSE;
 
+        /* COMMIT is only valid in IDLE state */
+        if (STATUS_IDLE != s_u8RegStatus)
+        {
+            return OperationInProgress;
+        }
+
         /* Basic frame size check */
         if (s_u16RxMailboxIdx < IAP_FRAME_MIN)
         {
@@ -669,8 +675,8 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
 
     BootParam_Read(&stcParam);
 
-    /* No firmware meta: reject */
-    if ((0u == stcParam.app_size) || (0u == stcParam.app_crc))
+    /* No firmware size: reject */
+    if (0u == stcParam.app_size)
     {
         stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
         return stcResult;
