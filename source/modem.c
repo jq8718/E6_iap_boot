@@ -521,7 +521,7 @@ static stc_cmd_result_t CmdEraseFlash(const uint8_t *pu8Payload, uint16_t u16Pay
                  ((uint32_t)pu8Payload[2] << 16) |
                  ((uint32_t)pu8Payload[3] << 24);
 
-    if ((u32AppSize == 0u) || (u32AppSize > (FLASH_SIZE - BOOT_SIZE)))
+    if ((u32AppSize == 0u) || (u32AppSize > APP_MAX_SIZE))
     {
         stcResult.u8ErrCode = ERROR_CODE_ADDR;
         return stcResult;
@@ -576,7 +576,7 @@ static stc_cmd_result_t CmdAppDownload(const uint8_t *pu8Payload, uint16_t u16Pa
     u16DataLen   = u16PayloadLen - 4u;
 
     if ((u32FlashAddr < APP_ADDR) ||
-        ((u32FlashAddr + u16DataLen) > (FLASH_START_ADDR + FLASH_SIZE)))
+        ((u32FlashAddr + u16DataLen) > (APP_ADDR + APP_MAX_SIZE)))
     {
         stcResult.u8ErrCode = ERROR_CODE_ADDR;
         return stcResult;
@@ -617,7 +617,7 @@ static stc_cmd_result_t CmdCrcFlash(const uint8_t *pu8Payload, uint16_t u16Paylo
                  ((uint32_t)pu8Payload[2] << 16) |
                  ((uint32_t)pu8Payload[3] << 24);
 
-    if ((u32AppSize == 0u) || (u32AppSize > (FLASH_SIZE - BOOT_SIZE)))
+    if ((u32AppSize == 0u) || (u32AppSize > APP_MAX_SIZE))
     {
         stcResult.u8ErrCode = ERROR_CODE_ADDR;
         return stcResult;

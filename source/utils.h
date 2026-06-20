@@ -70,13 +70,16 @@ extern "C" {
 /*===================================================================
  *  Bootloader FLASH Layout
  *===================================================================*/
-#define BOOT_SIZE      (8u * FLASH_SECTOR_SIZE)                    /* Boot FLASH size (4KB) */
-#define BOOT_PARAM_ADDR (FLASH_START_ADDR + BOOT_SIZE - FLASH_SECTOR_SIZE) /* Boot param sector */
+#define BOOT_SIZE      (8u * FLASH_SECTOR_SIZE) /* Boot FLASH size (4KB) */
+/* Boot parameter placed at the LAST sector of Flash so the bootloader
+ * can use the full BOOT_SIZE region for code. */
+#define BOOT_PARAM_ADDR (FLASH_START_ADDR + FLASH_SIZE - FLASH_SECTOR_SIZE)
 
 /*===================================================================
  *  APP FLASH Configuration
  *===================================================================*/
-#define APP_ADDR (FLASH_START_ADDR + BOOT_SIZE) /* APP start address */
+#define APP_ADDR      (FLASH_START_ADDR + BOOT_SIZE)                    /* APP start address */
+#define APP_MAX_SIZE  (FLASH_SIZE - BOOT_SIZE - FLASH_SECTOR_SIZE)      /* APP max size (excludes boot_param sector) */
 
 /*===================================================================
  *  Protocol Constants
