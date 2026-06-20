@@ -275,7 +275,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x0</StartAddress>
-                <Size>0x1000</Size>
+                <Size>0x1e00</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -446,6 +446,11 @@
               <FileName>sysctrl.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\driver\src\sysctrl.c</FilePath>
+            </File>
+            <File>
+              <FileName>gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\driver\src\gpio.c</FilePath>
             </File>
           </Files>
         </Group>
