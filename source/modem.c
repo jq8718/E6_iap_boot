@@ -73,7 +73,6 @@ static volatile uint16_t s_u16RxMailboxIdx;   /*!< Current RX MAILBOX write offs
 static volatile uint16_t s_u16TxMailboxIdx;   /*!< Current TX MAILBOX read offset */
 static volatile uint16_t s_u16SubAddr;        /*!< Current virtual register address */
 static volatile boolean_t s_bSubAddrValid;    /*!< Sub-address received in current transaction */
-static volatile boolean_t s_bTransactionActive; /*!< I2C transaction in progress */
 static volatile uint8_t  s_u8TxLenByteIdx;    /*!< TX_LEN byte index (0=low, 1=high) */
 
 /* Control flags set by ISR, consumed by MODEM_Process */
@@ -105,7 +104,6 @@ void MODEM_RamInit(void)
     s_u16TxMailboxIdx    = 0u;
     s_u16SubAddr        = 0u;
     s_bSubAddrValid      = FALSE;
-    s_bTransactionActive = FALSE;
     s_u8TxLenByteIdx     = 0u;
     s_bCtrlCommit        = FALSE;
     s_bCtrlClear         = FALSE;
@@ -142,14 +140,12 @@ void MODEM_I2cIrqHandler(void)
     /* Address valid / repeated start */
     if (u32Flags & (HSI2C_SLAVE_FLAG_AVF | HSI2C_SLAVE_FLAG_RSF))
     {
-        s_bTransactionActive = TRUE;
         (void)HSI2C->SASR; /* Read SASR to clear AVF */
     }
 
     /* STOP: transaction ended, reset state */
     if (u32Flags & HSI2C_SLAVE_FLAG_SDF)
     {
-        s_bTransactionActive = FALSE;
         s_bSubAddrValid      = FALSE;
         s_u8TxLenByteIdx     = 0u;
     }
@@ -578,6 +574,11 @@ static stc_cmd_result_t CmdAppDownload(const uint8_t *pu8Payload, uint16_t u16Pa
                    ((uint32_t)pu8Payload[3] << 24);
     u16DataLen   = u16PayloadLen - 4u;
 
+    if (0u == u16DataLen)
+    {
+        return stcResult; /* Nothing to write, return OK */
+    }
+
     if ((u32FlashAddr < APP_ADDR) ||
         ((u32FlashAddr + u16DataLen) > (APP_ADDR + APP_MAX_SIZE)))
     {
@@ -667,6 +668,13 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
     }
 
     BootParam_Read(&stcParam);
+
+    /* No firmware meta: reject */
+    if ((0u == stcParam.app_size) || (0u == stcParam.app_crc))
+    {
+        stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
+        return stcResult;
+    }
 
     /* Boot self-verification: re-calculate CRC and compare */
     u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, stcParam.app_size);
