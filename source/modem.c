@@ -71,7 +71,7 @@ static uint8_t  s_au8TxMailbox[IAP_MAILBOX_SIZE]; /*!< Response frame buffer */
 /* I2C transaction state */
 static volatile uint16_t s_u16RxMailboxIdx;   /*!< Current RX MAILBOX write offset */
 static volatile uint16_t s_u16TxMailboxIdx;   /*!< Current TX MAILBOX read offset */
-static volatile uint8_t  s_u8SubAddr;         /*!< Current sub-address */
+static volatile uint16_t s_u16SubAddr;        /*!< Current virtual register address */
 static volatile boolean_t s_bSubAddrValid;    /*!< Sub-address received in current transaction */
 static volatile boolean_t s_bTransactionActive; /*!< I2C transaction in progress */
 static volatile uint8_t  s_u8TxLenByteIdx;    /*!< TX_LEN byte index (0=low, 1=high) */
@@ -103,7 +103,7 @@ void MODEM_RamInit(void)
     s_u16RegTxLen        = 0u;
     s_u16RxMailboxIdx    = 0u;
     s_u16TxMailboxIdx    = 0u;
-    s_u8SubAddr          = 0u;
+    s_u16SubAddr        = 0u;
     s_bSubAddrValid      = FALSE;
     s_bTransactionActive = FALSE;
     s_u8TxLenByteIdx     = 0u;
@@ -163,12 +163,12 @@ void MODEM_I2cIrqHandler(void)
             if (!s_bSubAddrValid)
             {
                 /* First byte after address is the sub-address */
-                s_u8SubAddr     = u8Data;
+                s_u16SubAddr     = u8Data;
                 s_bSubAddrValid = TRUE;
-                if ((s_u8SubAddr >= REG_MAILBOX_START) && (s_u8SubAddr <= REG_MAILBOX_END))
+                if ((s_u16SubAddr >= REG_MAILBOX_START) && (s_u16SubAddr <= REG_MAILBOX_END))
                 {
-                    s_u16RxMailboxIdx = (uint16_t)(s_u8SubAddr - REG_MAILBOX_START);
-                    s_u16TxMailboxIdx = (uint16_t)(s_u8SubAddr - REG_MAILBOX_START);
+                    s_u16RxMailboxIdx = (uint16_t)(s_u16SubAddr - REG_MAILBOX_START);
+                    s_u16TxMailboxIdx = (uint16_t)(s_u16SubAddr - REG_MAILBOX_START);
                 }
                 else
                 {
@@ -179,7 +179,7 @@ void MODEM_I2cIrqHandler(void)
             else
             {
                 /* Route data based on sub-address */
-                switch (s_u8SubAddr)
+                switch (s_u16SubAddr)
                 {
                     case REG_CTRL:
                         if (CTRL_COMMIT == u8Data)
@@ -200,7 +200,7 @@ void MODEM_I2cIrqHandler(void)
                         break;
 
                     default:
-                        if ((s_u8SubAddr >= REG_MAILBOX_START) && (s_u8SubAddr <= REG_MAILBOX_END))
+                        if ((s_u16SubAddr >= REG_MAILBOX_START) && (s_u16SubAddr <= REG_MAILBOX_END))
                         {
                             if (STATUS_IDLE == s_u8RegStatus)
                             {
@@ -210,7 +210,7 @@ void MODEM_I2cIrqHandler(void)
                                 }
                             }
                             /* Else: discard write when not IDLE */
-                            s_u8SubAddr++; /* Auto-increment virtual register address */
+                            s_u16SubAddr++; /* Auto-increment virtual register address */
                         }
                         break;
                 }
@@ -223,7 +223,7 @@ void MODEM_I2cIrqHandler(void)
     {
         uint8_t u8TxData = 0x00u;
 
-        switch (s_u8SubAddr)
+        switch (s_u16SubAddr)
         {
             case REG_STATUS:
                 u8TxData = s_u8RegStatus;
@@ -246,7 +246,7 @@ void MODEM_I2cIrqHandler(void)
                 break;
 
             default:
-                if ((s_u8SubAddr >= REG_MAILBOX_START) && (s_u8SubAddr <= REG_MAILBOX_END))
+                if ((s_u16SubAddr >= REG_MAILBOX_START) && (s_u16SubAddr <= REG_MAILBOX_END))
                 {
                     if (s_u16TxMailboxIdx < s_u16RegTxLen)
                     {
@@ -256,7 +256,7 @@ void MODEM_I2cIrqHandler(void)
                     {
                         u8TxData = 0x00u;
                     }
-                    s_u8SubAddr++; /* Auto-increment virtual register address */
+                    s_u16SubAddr++; /* Auto-increment virtual register address */
                 }
                 break;
         }

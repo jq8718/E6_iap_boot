@@ -426,6 +426,13 @@
         </Group>
         <Group>
           <GroupName>driver</GroupName>
+          <Files>
+            <File>
+              <FileName>hsi2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\driver\src\hsi2c.c</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>README</GroupName>
