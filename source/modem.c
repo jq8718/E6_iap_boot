@@ -501,8 +501,8 @@ static stc_cmd_result_t CmdHandshake(void)
 
     stcResult.u8ErrCode     = ERROR_CODE_OK;
     stcResult.au8Payload[0] = IAP_PROTOCOL_VERSION;
-    stcResult.au8Payload[1] = (uint8_t)IAP_PAYLOAD_MAX;
-    stcResult.au8Payload[2] = (uint8_t)(IAP_PAYLOAD_MAX >> 8);
+    stcResult.au8Payload[1] = (uint8_t)IAP_FLASH_DATA_MAX;
+    stcResult.au8Payload[2] = (uint8_t)(IAP_FLASH_DATA_MAX >> 8);
     stcResult.u16PayloadLen = 3u;
 
     return stcResult;

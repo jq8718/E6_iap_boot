@@ -257,7 +257,7 @@ Offset  Size  Name        说明
 
 | Cmd | PayloadLen | Payload 内容 |
 |------|-----------|------|
-| HANDSHAKE | 4 | `[0]=OK` `[1]=协议版本` `[2:3]=PAYLOAD_MAX(=516)` |
+| HANDSHAKE | 4 | `[0]=OK` `[1]=协议版本` `[2:3]=每包最大固件数据(=512)` |
 | ERASE_FLASH | 1 | `[0]=OK` |
 | APP_DOWNLOAD | 1 | `[0]=OK` |
 | CRC_FLASH | 3 | `[0]=OK` `[1:2]=Flash CRC16` |
@@ -459,7 +459,7 @@ S + SLA(W) + 0x20 + Sr + SLA(R) +
   04 00        PayloadLen = 4
   00           Payload[0] = OK
   01           Payload[1] = 协议版本 0x01
-  00 02        Payload[2:3] = PAYLOAD_MAX = 512
+  00 02        Payload[2:3] = 每包最大固件数据 = 512
   ## ##        CRC16
 + P
 ```
