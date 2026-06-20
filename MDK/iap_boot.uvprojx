@@ -392,6 +392,11 @@
               <FileType>1</FileType>
               <FilePath>..\common\interrupts_hc32l021.c</FilePath>
             </File>
+            <File>
+              <FileName>system_hc32l021.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\common\system_hc32l021.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
