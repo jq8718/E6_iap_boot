@@ -81,16 +81,18 @@ Bootloader 作为 I2C 从机，通过 1 字节 sub-address 映射虚拟寄存器
 #define ERROR_CODE_APP_INVALID (0x08u)
 ```
 
-### 2.1 寄存器详解
+### 2.1 STATUS（地址 0x00，只读 1 字节）
 
-| 值 | 名称 | 说明 |
-|------|------|------|
-| `0x00` | `IDLE` | 空闲，可写 MAILBOX |
-| `0x02` | `BUSY` | 正在执行（Flash 擦写 / CRC / 跳转准备），勿写 MAILBOX |
-| `0x03` | `RESP_READY` | 响应已就绪，主机可读 |
-| `0x04` | `ERROR` | 出错，读取 `ERROR` 获取错误码 |
+STATUS 寄存器指示 Bootloader 当前工作状态。主机在每次写命令前应先检查 STATUS == IDLE。
 
-状态转换：
+| 合法值 | 名称 | 触发条件 | 行为说明 |
+|--------|------|---------|---------|
+| `0x00` | `IDLE` | 空闲/被 CLEAR/ABORT 清空 | 可写 MAILBOX，可写 COMMIT |
+| `0x02` | `BUSY` | 收到 COMMIT 后开始执行 | Flash 擦写/CRC/跳转准备中，勿写 MAILBOX |
+| `0x03` | `RESP_READY` | 命令执行成功 | 响应帧已在 MAILBOX 中，主机可读 |
+| `0x04` | `ERROR` | 命令执行或帧校验失败 | 读取 ERROR 寄存器获取错误码 |
+
+**状态转换**：
 
 ```text
 IDLE ──(COMMIT)──→ BUSY ──(成功)──→ RESP_READY ──(CLEAR)──→ IDLE
@@ -98,49 +100,93 @@ IDLE ──(COMMIT)──→ BUSY ──(成功)──→ RESP_READY ──(CLEA
                      └──(失败)──→  ERROR  ──(CLEAR/ABORT)──→ IDLE
 ```
 
-### 2.3 ERROR
+---
 
-| 值 | 名称 | 说明 |
-|------|------|------|
+### 2.2 ERROR（地址 0x01，只读 1 字节）
+
+ERROR 寄存器记录最近一次错误码。仅在 `STATUS == ERROR` 时有效；`STATUS != ERROR` 时返回 `0x00`。
+
+ERROR 值与响应帧 `Payload[0]` 的错误码保持**完全一致**，主机可通过两种方式获取：
+
+- 快速诊断：`STATUS == ERROR` 时直接读 ERROR 寄存器
+- 权威来源：读完整响应帧的 `Payload[0]`
+
+| 合法值 | 名称 | 说明 |
+|--------|------|------|
 | `0x00` | `OK` | 无错误 |
-| `0x01` | `CRC_ERROR` | 请求帧 CRC 校验失败 |
-| `0x02` | `FRAME_ERROR` | Magic、PayloadLen 或 Version 非法 |
+| `0x01` | `CRC_ERROR` | 请求帧 CRC16 校验失败 |
+| `0x02` | `FRAME_ERROR` | Magic 不匹配 / PayloadLen 超限 / Version 不匹配 |
 | `0x03` | `UNSUPPORTED_CMD` | 不支持的命令码 |
-| `0x04` | `ADDR_ERROR` | Flash 地址非法或越界 |
-| `0x05` | `FLASH_ERROR` | Flash 擦写失败 |
-| `0x06` | `BUSY_ERROR` | 当前状态不允许此操作 |
-| `0x07` | `SEQ_ERROR` | 序号重复或非法 |
-| `0x08` | `APP_INVALID` | APP 向量表检查不通过 |
+| `0x04` | `ADDR_ERROR` | Flash 地址超出 `[APP_ADDR, APP_ADDR + APP_MAX_SIZE)` |
+| `0x05` | `FLASH_ERROR` | Flash 擦除或写入操作失败 |
+| `0x06` | `BUSY_ERROR` | 当前状态不允许此操作（如非 IDLE 时写 COMMIT） |
+| `0x07` | `SEQ_ERROR` | 帧序号重复或非法（当前未实现） |
+| `0x08` | `APP_INVALID` | APP 向量表检查不通过（栈顶/ResetHandler/CRC 不匹配） |
 
-`ERROR` 与响应帧 `Payload[0]` 的错误码值保持一致。`ERROR` 是轻量级快速诊断通道——主机在轮询到 `STATUS == ERROR` 时可直接读 `ERROR` 寄存器判断错误类型，无需读取完整响应帧。也可以跳过 `ERROR`，直接从响应帧 `Payload[0]` 获取权威错误码。
+---
 
-### 2.4 CTRL
+### 2.3 CTRL（地址 0x02，只写 1 字节）
 
-| 值 | 名称 | 说明 |
-|------|------|------|
-| `0xA5` | `COMMIT` | 提交 MAILBOX 内容，Boot 开始解析执行。`STATUS == BUSY` 时忽略 |
-| `0x5A` | `CLEAR` | 主机已读完响应，Boot 清状态回 `IDLE` |
-| `0xC3` | `ABORT` | 放弃当前操作，状态回 `IDLE` |
+主机通过写 CTRL 寄存器控制 Bootloader 行为。CTRL 值不保留——写入后立即生效，不提供读取。
 
-### 2.5 TX_LEN
+| 合法值 | 名称 | 说明 |
+|--------|------|------|
+| `0xA5` | `COMMIT` | 提交 MAILBOX 内容给 Boot 解析执行。`STATUS == BUSY` 时忽略 |
+| `0x5A` | `CLEAR` | 主机已读完响应帧，Boot 清状态回 `IDLE`。可在 `RESP_READY` 或 `ERROR` 状态下使用 |
+| `0xC3` | `ABORT` | 放弃当前操作，无条件回到 `IDLE`。丢弃任何未读的响应 |
 
-只读，2 字节小端。值由 Boot 在构造响应帧后设置。仅 `STATUS == RESP_READY` 时有效。
+**注意**：写入 `0xA5` / `0x5A` / `0xC3` 以外的值被忽略。
 
-### 2.6 MAILBOX
+---
 
-数据窗口。写入和读取都从指定偏移开始，后续字节自动增量。START-STOP 之间可写任意长度，支持分多次 I2C 事务写入完整请求帧。
+### 2.4 TX_LEN（地址 0x06，只读 2 字节）
 
-写入规则：
+TX_LEN 指示响应帧在 MAILBOX 中的字节数，**小端**（低字节在前）。
 
-- 仅 `STATUS == IDLE` 时允许写入。非 IDLE 时写入可能导致数据丢弃。
-- 主机可写入 `0x20` ~ `0x231` 范围内的任意起始地址。同一事务内连续字节地址自动增量。
-- 写入同一地址会覆盖该位置已有数据。多次写入不同地址段互相独立（例如先写 `0x20~0x4F`，再写 `0x50~0xFF`，两次写入互不影响）。
-- 写入内容在 `COMMIT` 之前不会被解析。
+| 条件 | 返回值 |
+|------|--------|
+| `STATUS == RESP_READY` | 有效帧长度（`10 ~ 530`） |
+| `STATUS != RESP_READY` | `0x0000` |
 
-读取规则：
+**读取方法**：一次 I2C 读事务读取 2 字节，先低后高：
 
-- 仅 `STATUS == RESP_READY` 时有效。非 RESP_READY 时读取的数据无协议意义。
-- 从任意偏移开始读取均可，但正常流程从 `0x20`（MAILBOX[0]）开始读。
+```text
+S + SLA(W) + 0x06 + Sr + SLA(R) + len_l + len_h + P
+len = len_l | (len_h << 8)
+```
+
+---
+
+### 2.5 MAILBOX（地址 0x20 ~ 0x231，读写 530 字节）
+
+MAILBOX 是帧数据窗口。主机通过写 MAILBOX 发送请求帧，通过读 MAILBOX 获取响应帧。
+
+**地址映射**：`0x20` = MAILBOX[0]，`0x21` = MAILBOX[1]，...，`0x231` = MAILBOX[529]。
+
+**写入规则**（主机 → Boot）：
+
+- 仅 `STATUS == IDLE` 时允许写入。非 IDLE 时写入数据被丢弃。
+- 主机可写入 `0x20 ~ 0x231` 范围内任意起始地址。同一 I2C 事务内连续字节地址自动增量。
+- 写入同一地址会覆盖该位置已有数据。多次写入不同地址段互相独立。
+- 写入内容在 CTRL = COMMIT 之前不会被解析。
+
+**读取规则**（Boot → 主机）：
+
+- 仅 `STATUS == RESP_READY` 时数据有效。非 `RESP_READY` 时返回 `0x00`。
+- 从任意偏移开始读取均可，正常流程从 `0x20` 读取完整响应帧。
+
+**自动增量示例**：
+
+```text
+写操作：S + SLA(W) + 0x20 + [8B Header] + [Payload] + [2B CRC] + P
+                        ↑                                      ↑
+                    地址 0x20                             地址 0x20+N+9
+             每个字节地址自动 +1，从 0x20 递增到 0x20+N+9
+
+读操作：S + SLA(W) + 0x20 + Sr + SLA(R) + [TX_LEN 字节] + P
+                        ↑
+                    地址 0x20，读满 TX_LEN 个字节自动停止
+```
 
 ---
 
