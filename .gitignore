@@ -9,6 +9,7 @@ EWARM/*.ewp.bak
 
 MDK/Objects/
 MDK/Listings/
+MDK/output/
 MDK/*.uvguix.*
 MDK/*.uvoptx
 MDK/*.scvd
