@@ -45,7 +45,7 @@ extern "C" {
 /*===================================================================
  *  I2C Slave Configuration
  *===================================================================*/
-#define I2C_SLAVE_ADDR (0x30u) /* 7-bit I2C slave address, configurable */
+#define I2C_SLAVE_ADDR (0x20u) /* 7-bit I2C slave address, configurable */
 
 /*===================================================================
  *  Clock Configuration
