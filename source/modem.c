@@ -24,6 +24,7 @@
 #include "modem.h"
 #include "config_hc32l021.h"
 #include "boot_param.h"
+#include "hsi2c.h"
 
 /*******************************************************************************
  * Local type definitions ('typedef')
