@@ -68,3 +68,6 @@ echo "[5/5] Pushing to GitHub..."
 git push -u origin main
 
 echo "Done. Repository pushed to $REPO_URL"
+
+# Note: A post-commit hook has been installed at .git/hooks/post-commit
+# so future commits in this repository are automatically pushed to origin.
