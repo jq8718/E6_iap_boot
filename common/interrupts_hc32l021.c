@@ -5,7 +5,7 @@
    Change Logs:
    Date             Author          Notes
    2024-10-30       MADS            First version
-   2026-06-20       Claude          Use vector-table names directly, remove wrappers
+   2026-06-20       Claude          Use startup-supplied weak handlers
  @endverbatim
  *******************************************************************************
  * Copyright (C) 2024, Xiaohua Semiconductor Co., Ltd. All rights reserved.
@@ -46,117 +46,6 @@ void EnableNvic(IRQn_Type enIrq, en_irq_priority_level_t enLevel, boolean_t bEn)
         NVIC_DisableIRQ(enIrq);
     }
 }
-
-/**
- * @brief  NVIC hardware fault 中断处理函数
- * @retval None
- */
-void HardFault_Handler(void)
-{
-    volatile int32_t a = 0;
-
-    while (0 == a)
-    {
-        ;
-    }
-}
-
-/**
- * @defgroup INT_Weak_Functions 中断弱定义函数
- * @{
- */
-__WEAK void SysTick_Handler(void)
-{
-    ;
-}
-
-__WEAK void PORTA_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void PORTB_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void ATIM3_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void LPUART0_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void LPUART1_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void SPI_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void CTIM0_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void CTIM1_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void HSI2C_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void IWDT_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void RTC_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void ADC_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void VC0_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void VC1_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void LVD_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void FLASH_IRQHandler(void)
-{
-    ;
-}
-
-__WEAK void CTRIM_CLKDET_IRQHandler(void)
-{
-    ;
-}
-/**
- * @}
- */
 
 /******************************************************************************/
 /* EOF (not truncated)                                                        */
