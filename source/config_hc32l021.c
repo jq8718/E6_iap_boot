@@ -40,10 +40,10 @@
 #define FLASH_TIMEOUT     (0xFFFFu)                                        /* FLASH超时保护计数值 */
 #define FLASH_END_ADDR    ((uint32_t)(FLASH_START_ADDR + FLASH_SIZE - 1u)) /* FLASH末尾地址 */
 
-/* I2C GPIO 复用配置值（需根据 HC32L021 参考手册核对） */
-#define HSI2C_GPIO_PIN06_SEL    (2u)    /* PA06 选 HSI2C_SDA 功能 */
-#define HSI2C_GPIO_PIN07_SEL    (2u)    /* PA07 选 HSI2C_SCL 功能 */
-#define HSI2C_GPIO_LSEL         (1u)    /* GPIOAUX_CTRL1.HSI2C_LSEL = 1 选择 PA06/07 位置 */
+/* I2C GPIO 复用配置值（AF1 = HSI2C，见 gpio.h GPIO_PA06_AF_HSI2C_SDA / GPIO_PA07_AF_HSI2C_SCL） */
+#define HSI2C_GPIO_PIN06_SEL    (0x1u)  /* PA06 AF1 = HSI2C_SDA */
+#define HSI2C_GPIO_PIN07_SEL    (0x1u)  /* PA07 AF1 = HSI2C_SCL */
+#define HSI2C_GPIO_LSEL         (0u)    /* GPIOAUX_CTRL1.HSI2C_LSEL=0 选择 AF1 引脚位置 */
 
 /* FLASH写序列，每次FLASH寄存器修改，都需调用此序列 */
 #define FLASH_BYPASS() \
