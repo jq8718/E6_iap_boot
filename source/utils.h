@@ -83,11 +83,11 @@ extern "C" {
  *  Protocol Constants
  *===================================================================*/
 #define IAP_MAILBOX_SIZE     (530u) /* 530 bytes, sub-addresses 0x20~0x231 */
-#define IAP_PAYLOAD_MAX      (512u) /* Max payload bytes per frame */
+#define IAP_PAYLOAD_MAX      (516u) /* Max payload bytes per frame (includes FlashAddr in APP_DOWNLOAD) */
 #define IAP_HEADER_SIZE      (8u)   /* Fixed header size */
 #define IAP_CRC_SIZE         (2u)   /* CRC16 field size */
 #define IAP_FRAME_MIN        (10u)  /* Header(8) + CRC(2), PayloadLen=0 */
-#define IAP_FRAME_MAX        (522u) /* Header(8) + Payload(512) + CRC(2) */
+#define IAP_FRAME_MAX        (526u) /* Header(8) + Payload(516) + CRC(2) */
 #define IAP_PROTOCOL_VERSION (0x01u)
 
 /* Frame header offsets (in MAILBOX) */
