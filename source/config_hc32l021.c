@@ -174,19 +174,17 @@ __STATIC_INLINE void HC32_GpioInit(void)
     SYSCTRL->PERI_CLKEN0_f.GPIO_EN = 1; /* 确保 GPIOAUX 时钟已开 */
     GPIOAUX->CTRL1_f.HSI2C_LSEL = HSI2C_GPIO_LSEL;
 
-    /* 配置PA06为HSI2C_SDA：开漏输出 + 上拉 + 复用功能 */
+    /* 配置PA06为HSI2C_SDA：开漏输出 + 复用功能（外部上拉） */
     GPIOA->DIR_f.PIN06 = 0;             /* 输出方向（开漏模式下可双向） */
     GPIOA->OUT_f.PIN06 = 1;             /* 默认高 */
     GPIOA->OD_f.PIN06  = 1;             /* 开漏 */
-    GPIOA->PU_f.PIN06  = 1;             /* 上拉 */
     GPIOA->ADS_f.PIN06 = 0;             /* 数字功能 */
     GPIOA->PIN06_SEL   = HSI2C_GPIO_PIN06_SEL;
 
-    /* 配置PA07为HSI2C_SCL：开漏输出 + 上拉 + 复用功能 */
+    /* 配置PA07为HSI2C_SCL：开漏输出 + 复用功能（外部上拉） */
     GPIOA->DIR_f.PIN07 = 0;
     GPIOA->OUT_f.PIN07 = 1;
     GPIOA->OD_f.PIN07  = 1;             /* 开漏 */
-    GPIOA->PU_f.PIN07  = 1;             /* 上拉 */
     GPIOA->ADS_f.PIN07 = 0;
     GPIOA->PIN07_SEL   = HSI2C_GPIO_PIN07_SEL;
 }
