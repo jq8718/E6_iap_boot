@@ -435,7 +435,7 @@ en_result_t MODEM_Process(void)
     if (s_bCtrlClear)
     {
         s_bCtrlClear = FALSE;
-        if (STATUS_RESP_READY == s_u8RegStatus)
+        if ((STATUS_RESP_READY == s_u8RegStatus) || (STATUS_ERROR == s_u8RegStatus))
         {
             if (s_bJumpPending)
             {
