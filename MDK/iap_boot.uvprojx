@@ -417,6 +417,11 @@
               <FileType>1</FileType>
               <FilePath>..\source\config_hc32l021.c</FilePath>
             </File>
+            <File>
+              <FileName>boot_param.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\source\boot_param.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
