@@ -137,24 +137,8 @@ void MODEM_I2cIrqHandler(void)
 {
     uint32_t u32Flags = HSI2C->SSR;
 
-    /* Address valid / repeated start */
-    if (u32Flags & (HSI2C_SLAVE_FLAG_AVF | HSI2C_SLAVE_FLAG_RSF))
-    {
-        (void)HSI2C->SASR; /* Read SASR to clear AVF */
-    }
-
-    /* STOP: transaction ended, reset state */
-    if (u32Flags & HSI2C_SLAVE_FLAG_SDF)
-    {
-        s_bSubAddrValid      = FALSE;
-        s_u8TxLenByteIdx     = 0u;
-    }
-
-    /* Transmit ACK: must write STAR to release SCL after each ACK */
-    if (u32Flags & HSI2C_SLAVE_FLAG_TAF)
-    {
-        HSI2C->STAR = 0u;
-    }
+    /* Clear all pending flags first (write 1-to-clear) */
+    HSI2C->SSCR = u32Flags & HSI2C_SLAVE_FLAG_CLR_ALL;
 
     /* Receive data */
     if (u32Flags & HSI2C_SLAVE_FLAG_RDF)
@@ -211,8 +195,7 @@ void MODEM_I2cIrqHandler(void)
                                     s_au8RxMailbox[s_u16RxMailboxIdx++] = u8Data;
                                 }
                             }
-                            /* Else: discard write when not IDLE */
-                            s_u16SubAddr++; /* Auto-increment virtual register address */
+                            s_u16SubAddr++;
                         }
                         break;
                 }
@@ -261,7 +244,7 @@ void MODEM_I2cIrqHandler(void)
                     {
                         u8TxData = 0x00u;
                     }
-                    s_u16SubAddr++; /* Auto-increment virtual register address */
+                    s_u16SubAddr++;
                 }
                 break;
         }
@@ -269,14 +252,27 @@ void MODEM_I2cIrqHandler(void)
         HSI2C_SlaveWriteData(HSI2C, u8TxData);
     }
 
-    /* Error flags: clear them */
-    if (u32Flags & (HSI2C_SLAVE_FLAG_FEF | HSI2C_SLAVE_FLAG_BEF))
+    /* Stop or restart */
+    if (u32Flags & (HSI2C_SLAVE_FLAG_RSF | HSI2C_SLAVE_FLAG_SDF))
     {
-        HSI2C_SlaveFlagClear(HSI2C, HSI2C_SLAVE_FLAG_CLR_ALL);
+        if (u32Flags & HSI2C_SLAVE_FLAG_SDF)
+        {
+            s_bSubAddrValid      = FALSE;
+            s_u8TxLenByteIdx     = 0u;
+        }
+        HSI2C->STAR = 0u;
     }
-    else
+
+    /* Valid address */
+    if (u32Flags & (HSI2C_SLAVE_FLAG_AVF | HSI2C_SLAVE_FLAG_AM0F | HSI2C_SLAVE_FLAG_AM1F))
     {
-        HSI2C_SlaveFlagClear(HSI2C, u32Flags & HSI2C_SLAVE_FLAG_CLR_ALL);
+        (void)HSI2C->SASR;
+    }
+
+    /* Transmit ACK: release SCL */
+    if (u32Flags & HSI2C_SLAVE_FLAG_TAF)
+    {
+        HSI2C->STAR = 0u;
     }
 }
 
