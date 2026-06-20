@@ -1,12 +1,11 @@
-/**
- *******************************************************************************
+/*******************************************************************************
  * @file  config_hc32l021.c
- * @brief This file provides peripherial init
+ * @brief This file provides peripherial init for I2C IAP Bootloader
  @verbatim
    Change Logs:
    Date             Author          Notes
    2025-03-25       MADS            First version
-   2025-07-08       MADS            Modify local function name
+   2026-06-20       Claude          Replace LPUART1 with HSI2C slave (PA06/PA07)
  @endverbatim
  *******************************************************************************
  * Copyright (C) 2025, Xiaohua Semiconductor Co., Ltd. All rights reserved.
@@ -39,6 +38,11 @@
 
 #define FLASH_TIMEOUT     (0xFFFFu)                                        /* FLASH超时保护计数值 */
 #define FLASH_END_ADDR    ((uint32_t)(FLASH_START_ADDR + FLASH_SIZE - 1u)) /* FLASH末尾地址 */
+
+/* I2C GPIO 复用配置值（需根据 HC32L021 参考手册核对） */
+#define HSI2C_GPIO_PIN06_SEL    (2u)    /* PA06 选 HSI2C_SDA 功能 */
+#define HSI2C_GPIO_PIN07_SEL    (2u)    /* PA07 选 HSI2C_SCL 功能 */
+#define HSI2C_GPIO_LSEL         (1u)    /* GPIOAUX_CTRL1.HSI2C_LSEL = 1 选择 PA06/07 位置 */
 
 /* FLASH写序列，每次FLASH寄存器修改，都需调用此序列 */
 #define FLASH_BYPASS() \
@@ -82,8 +86,6 @@ __STATIC_INLINE void HC32_SysClockInit(void);
 __STATIC_INLINE void HC32_SysClockDeInit(void);
 __STATIC_INLINE void HC32_GpioInit(void);
 __STATIC_INLINE void HC32_GpioDeInit(void);
-__STATIC_INLINE void HC32_Lpuart1Init(void);
-__STATIC_INLINE void HC32_Lpuart1DeInit(void);
 __STATIC_INLINE void HC32_Btim0Init(void);
 __STATIC_INLINE void HC32_Btim0DeInit(void);
 /*******************************************************************************
@@ -101,11 +103,11 @@ void HC32_PeriModuleInit(void)
     /* 系统时钟初始化 */
     HC32_SysClockInit();
 
-    /* 串口引脚初始化 */
+    /* I2C引脚初始化 */
     HC32_GpioInit();
 
-    /* 串口模块初始化 */
-    HC32_Lpuart1Init();
+    /* I2C从机模块初始化 */
+    HC32_I2cSlaveInit();
 
     /* 定时器模块初始化 */
     HC32_Btim0Init();
@@ -120,11 +122,11 @@ void HC32_PeriModuleDeInit(void)
     /* 系统时钟复位 */
     HC32_SysClockDeInit();
 
-    /* 串口引脚复位 */
+    /* I2C引脚复位 */
     HC32_GpioDeInit();
 
-    /* 串口模块复位 */
-    HC32_Lpuart1DeInit();
+    /* I2C模块复位 */
+    HC32_I2cSlaveDeInit();
 
     /* 定时器模块复位 */
     HC32_Btim0DeInit();
@@ -159,7 +161,7 @@ __STATIC_INLINE void HC32_SysClockDeInit(void)
 }
 
 /**
- * @brief  串口引脚初始化
+ * @brief  I2C引脚初始化 (PA06=SDA, PA07=SCL)
  * @retval None
  */
 __STATIC_INLINE void HC32_GpioInit(void)
@@ -167,21 +169,29 @@ __STATIC_INLINE void HC32_GpioInit(void)
     /* 外设模块时钟使能 */
     SYSCTRL->PERI_CLKEN0_f.GPIO_EN = 1;
 
-    /* 配置PA01为LPUART1_TX，CMOS输出 */
-    GPIOA->OUT_f.PIN01 = 1;
-    GPIOA->DIR_f.PIN01 = 0;
-    GPIOA->ADS_f.PIN01 = 0;
-    GPIOA->PIN01_SEL   = 1;
+    /* 选择 HSI2C 引脚位置为 PA06/PA07 */
+    SYSCTRL->PERI_CLKEN0_f.GPIO_EN = 1; /* 确保 GPIOAUX 时钟已开 */
+    GPIOAUX->CTRL1_f.HSI2C_LSEL = HSI2C_GPIO_LSEL;
 
-    /* 配置PA02为LPUART1_RX，输入使能上拉 */
-    GPIOA->DIR_f.PIN02 = 1;
-    GPIOA->PU_f.PIN02  = 1;
-    GPIOA->ADS_f.PIN02 = 0;
-    GPIOA->PIN02_SEL   = 1;
+    /* 配置PA06为HSI2C_SDA：开漏输出 + 上拉 + 复用功能 */
+    GPIOA->DIR_f.PIN06 = 0;             /* 输出方向（开漏模式下可双向） */
+    GPIOA->OUT_f.PIN06 = 1;             /* 默认高 */
+    GPIOA->OD_f.PIN06  = 1;             /* 开漏 */
+    GPIOA->PU_f.PIN06  = 1;             /* 上拉 */
+    GPIOA->ADS_f.PIN06 = 0;             /* 数字功能 */
+    GPIOA->PIN06_SEL   = HSI2C_GPIO_PIN06_SEL;
+
+    /* 配置PA07为HSI2C_SCL：开漏输出 + 上拉 + 复用功能 */
+    GPIOA->DIR_f.PIN07 = 0;
+    GPIOA->OUT_f.PIN07 = 1;
+    GPIOA->OD_f.PIN07  = 1;             /* 开漏 */
+    GPIOA->PU_f.PIN07  = 1;             /* 上拉 */
+    GPIOA->ADS_f.PIN07 = 0;
+    GPIOA->PIN07_SEL   = HSI2C_GPIO_PIN07_SEL;
 }
 
 /**
- * @brief  串口引脚复位
+ * @brief  I2C引脚复位
  * @retval None
  */
 __STATIC_INLINE void HC32_GpioDeInit(void)
@@ -194,44 +204,60 @@ __STATIC_INLINE void HC32_GpioDeInit(void)
 }
 
 /**
- * @brief  串口模块初始化
+ * @brief  HSI2C从机初始化
  * @retval None
  */
-__STATIC_INLINE void HC32_Lpuart1Init(void)
+void HC32_I2cSlaveInit(void)
 {
-    float32_t f32Scnt = 0;
+    stc_hsi2c_slave_init_t stcSlaveInit;
 
     /* 外设模块时钟使能 */
-    SYSCTRL->PERI_CLKEN0_f.LPUART1_EN = 1;
+    SYSCTRL->PERI_CLKEN0_f.HSI2C_EN = 1;
 
-    CLR_REG(LPUART1->SCON);
+    /* 结构体默认值 */
+    HSI2C_SlaveStcInit(&stcSlaveInit);
 
-    WRITE_REG(LPUART1->SCON, (0x00u << LPUART_SCON_STOPBIT_Pos) | (0x1u << LPUART_SCON_SM_Pos) | (LPUART_SCON_REN_Msk) | (0x00u << LPUART_SCON_SCLKSEL_Pos));
+    /* 从机地址、sub-address、方向 */
+    stcSlaveInit.u32SlaveAddr0 = I2C_SLAVE_ADDR;
+    stcSlaveInit.u8SubAddrSize = 1u;
+    stcSlaveInit.enDir         = Hsi2cMasterWriteSlaveRead;
 
-    MODIFY_REG(LPUART1->SCON, LPUART_SCON_OVER, (0x2u << LPUART_SCON_OVER_Pos));
+    /* 启用 SCL Clock Stretching：发送/接收/ACK 阶段均可拉低 SCL */
+    stcSlaveInit.stcSlaveConfig1.u32FuncSelect =
+        HSI2C_SLAVE_TXDSTALL_ENABLE |
+        HSI2C_SLAVE_RXSTALL_ENABLE  |
+        HSI2C_SLAVE_ACKSTALL_ENABLE;
 
-    f32Scnt = (float32_t)(SYS_CLK_INIT_HZ) / (float32_t)(BAUD_RATE << 2);
-    WRITE_REG(LPUART1->SCNT, (uint16_t)(float32_t)(f32Scnt + 0.5f));
+    /* 从机初始化 */
+    HSI2C_SlaveInit(HSI2C, &stcSlaveInit, SYS_CLK_INIT_HZ);
 
-    // uint32_t u32Bps = ((SYS_CLK_INIT_HZ / ((uint16_t)(float32_t)(f32Scnt + 0.5f))) >> 2); /* 最终波特率设定值*/
+    /* 清除所有从机标志 */
+    HSI2C_SlaveFlagClear(HSI2C, HSI2C_SLAVE_FLAG_CLR_ALL);
 
-    LPUART1->ICR = 0u; /* 清除所有状态标志 */
+    /* 使能从机中断：地址有效、STOP、接收数据、发送数据、FIFO错误、位错误 */
+    HSI2C_SlaveIntEnable(HSI2C,
+                         HSI2C_SLAVE_INT_AVIE |
+                         HSI2C_SLAVE_INT_SDIE |
+                         HSI2C_SLAVE_INT_RDIE |
+                         HSI2C_SLAVE_INT_TDIE |
+                         HSI2C_SLAVE_INT_FEIE |
+                         HSI2C_SLAVE_INT_BEIE);
 
-    LPUART1->SCON_f.RCIE = 1;                          /* 使能串口接收中断 */
-    EnableNvic(LPUART1_IRQn, IrqPriorityLevel0, TRUE); /* 系统中断使能 */
+    /* NVIC 使能 */
+    EnableNvic(HSI2C_IRQn, IrqPriorityLevel0, TRUE);
 }
 
 /**
- * @brief  串口模块复位
+ * @brief  HSI2C从机复位
  * @retval None
  */
-__STATIC_INLINE void HC32_Lpuart1DeInit(void)
+void HC32_I2cSlaveDeInit(void)
 {
     /* 外设模块时钟关闭 */
-    SYSCTRL->PERI_CLKEN0_f.LPUART1_EN = 0;
+    SYSCTRL->PERI_CLKEN0_f.HSI2C_EN = 0;
     /* 外设模块复位 */
-    SYSCTRL->PERI_RESET0_f.LPUART1_RST = 0;
-    SYSCTRL->PERI_RESET0_f.LPUART1_RST = 1;
+    SYSCTRL->PERI_RESET0_f.HSI2C_RST = 0;
+    SYSCTRL->PERI_RESET0_f.HSI2C_RST = 1;
 }
 
 /**
@@ -304,66 +330,6 @@ uint32_t HC32_CalCrc16(uint8_t *pu8Data, uint32_t u32Offset, uint32_t u32Size)
     u16CrcResult = (uint16_t)(~u16CrcResult);
 
     return u16CrcResult;
-}
-
-/**
- * @brief  获取串口异常状态
- * @retval 获取串口数据接收标志位
- */
-uint32_t HC32_GetUartErrStatus(void)
-{
-    return (READ_REG_BIT(LPUART1->ISR, LPUART_ISR_FE | LPUART_ISR_PE));
-}
-
-/**
- * @brief  清除串口异常状态位
- * @retval None
- */
-void HC32_ClrUartErrStatus(void)
-{
-    CLR_REG_BIT(LPUART1->ICR, LPUART_ISR_FE | LPUART_ISR_PE);
-}
-
-/**
- * @brief  获取串口数据接收状态
- * @retval 获取串口数据接收标志位
- */
-uint32_t HC32_GetUartRCStatus(void)
-{
-    return (READ_REG_BIT(LPUART1->ISR, LPUART_ISR_RC));
-}
-
-/**
- * @brief  清除串口数据接收状态位
- * @retval None
- */
-void HC32_ClrUartRCStatus(void)
-{
-    CLR_REG_BIT(LPUART1->ICR, LPUART_ISR_RC);
-}
-
-/**
- * @brief  获取串口接收数据
- * @retval 串口接收buff数据
- */
-uint8_t HC32_GetUartBuff()
-{
-    return (READ_REG(LPUART1->SBUF));
-}
-
-/**
- * @brief  串口发送一个数据字节
- * @param  [in] u8TxData 发送数据
- * @retval None
- */
-void HC32_UartSendByte(uint8_t u8TxData)
-{
-    WRITE_REG(LPUART1->SBUF_f.DATA, u8TxData);                 /* 发送缓存写数据 */
-    while (READ_REG_BIT(LPUART1->ISR, LPUART_ISR_TC_Msk) == 0) /* 等待发送完成 */
-    {
-        ;
-    }
-    CLR_REG_BIT(LPUART1->ICR, LPUART_ISR_TC_Msk); /* 清除发送完成标志位 */
 }
 
 /**
