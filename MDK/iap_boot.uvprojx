@@ -442,6 +442,11 @@
               <FileType>1</FileType>
               <FilePath>..\driver\src\ddl.c</FilePath>
             </File>
+            <File>
+              <FileName>sysctrl.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\driver\src\sysctrl.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
