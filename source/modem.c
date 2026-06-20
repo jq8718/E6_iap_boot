@@ -675,6 +675,22 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
 
     BootParam_Read(&stcParam);
 
+    /* Boot parameter area integrity check */
+    if (BOOT_PARAM_MAGIC != stcParam.magic)
+    {
+        stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
+        return stcResult;
+    }
+
+    {
+        uint16_t u16HeaderCrc = BootParam_CalcHeaderCrc(&stcParam);
+        if (u16HeaderCrc != (uint16_t)stcParam.header_crc)
+        {
+            stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
+            return stcResult;
+        }
+    }
+
     /* No firmware size: reject */
     if (0u == stcParam.app_size)
     {

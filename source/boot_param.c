@@ -30,7 +30,7 @@
 /*******************************************************************************
  * Local function prototypes ('static')
  ******************************************************************************/
-static uint16_t BootParam_CalcHeaderCrc(const stc_boot_param_t *pstcParam);
+/* BootParam_CalcHeaderCrc is declared in boot_param.h */
 
 /*******************************************************************************
  * Function implementation - global ('extern') and local ('static')
@@ -41,7 +41,7 @@ static uint16_t BootParam_CalcHeaderCrc(const stc_boot_param_t *pstcParam);
  * @param  [in] pstcParam  Pointer to boot parameter structure
  * @retval CRC16 value
  */
-static uint16_t BootParam_CalcHeaderCrc(const stc_boot_param_t *pstcParam)
+uint16_t BootParam_CalcHeaderCrc(const stc_boot_param_t *pstcParam)
 {
     return (uint16_t)HC32_CalCrc16((uint8_t *)pstcParam, 0u, BOOT_PARAM_PAYLOAD_SIZE);
 }

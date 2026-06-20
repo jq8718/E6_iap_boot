@@ -108,11 +108,14 @@ void IAP_UpdateCheck(void)
     switch (stcParam.state)
     {
         case BOOT_PARAM_STATE_IMAGE_VALID:
-            /* Image verified OK: try jumping to APP */
-            if (Error == IAP_JumpToApp(APP_ADDR))
+            /* Image verified OK: verify CRC and try jumping to APP */
             {
-                /* Jump failed — mark invalid and stay in bootloader for recovery */
-                BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
+                uint16_t u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, stcParam.app_size);
+                if ((u16Crc != (uint16_t)stcParam.app_crc) || (Error == IAP_JumpToApp(APP_ADDR)))
+                {
+                    /* Verification or jump failed — mark invalid and stay in bootloader for recovery */
+                    BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
+                }
             }
             break;
 
@@ -141,18 +144,29 @@ void IAP_UpdateCheck(void)
  */
 static en_result_t IAP_JumpToApp(uint32_t u32Addr)
 {
-    uint32_t u32StackTop = *((__IO uint32_t *)u32Addr); /* 读取APP程序栈顶地址 */
+    uint32_t u32StackTop     = *((__IO uint32_t *)u32Addr);        /* APP 栈顶地址 */
+    uint32_t u32ResetHandler = *((__IO uint32_t *)(u32Addr + 4u)); /* APP ResetHandler */
 
-    /* 判断栈顶地址有效性 */
-    if ((u32StackTop > SRAM_BASE) && (u32StackTop <= (SRAM_BASE + RAM_SIZE)))
+    /* 栈顶地址有效性 */
+    if ((u32StackTop <= SRAM_BASE) || (u32StackTop > (SRAM_BASE + RAM_SIZE)))
     {
-        /* 配置跳转到用户程序复位中断入口 */
-        u32JumpAddress       = *(__IO uint32_t *)(u32Addr + 4);
-        pfnJumpToApplication = (func_ptr_t)u32JumpAddress;
-        /* 初始化用户程序的栈顶指针 */
-        __set_MSP(*(__IO uint32_t *)u32Addr);
-        pfnJumpToApplication();
+        return Error;
     }
+
+    /* ResetHandler 必须在 APP Flash 范围内，且为 Thumb 地址（LSB=1） */
+    if ((u32ResetHandler < APP_ADDR) ||
+        (u32ResetHandler >= (APP_ADDR + APP_MAX_SIZE)) ||
+        ((u32ResetHandler & 0x1u) == 0u))
+    {
+        return Error;
+    }
+
+    /* 配置跳转到用户程序复位中断入口 */
+    u32JumpAddress       = u32ResetHandler;
+    pfnJumpToApplication = (func_ptr_t)u32JumpAddress;
+    /* 初始化用户程序的栈顶指针 */
+    __set_MSP(u32StackTop);
+    pfnJumpToApplication();
 
     return Error;
 }

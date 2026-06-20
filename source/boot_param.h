@@ -68,6 +68,7 @@ en_result_t BootParam_Write(const stc_boot_param_t *pstcParam);
 en_result_t BootParam_WriteState(uint32_t u32State);
 en_result_t BootParam_WriteAppInfo(uint32_t u32Size, uint16_t u16Crc);
 void        BootParam_Erase(void);
+uint16_t    BootParam_CalcHeaderCrc(const stc_boot_param_t *pstcParam); /* Calculate header CRC16 */
 
 #ifdef __cplusplus
 }
