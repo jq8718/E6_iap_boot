@@ -23,6 +23,7 @@
  ******************************************************************************/
 #include "config_hc32l021.h"
 #include "hsi2c.h"
+#include "gpio.h"
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
@@ -40,10 +41,8 @@
 #define FLASH_TIMEOUT     (0xFFFFu)                                        /* FLASH超时保护计数值 */
 #define FLASH_END_ADDR    ((uint32_t)(FLASH_START_ADDR + FLASH_SIZE - 1u)) /* FLASH末尾地址 */
 
-/* I2C GPIO 复用配置值（AF1 = HSI2C，见 gpio.h GPIO_PA06_AF_HSI2C_SDA / GPIO_PA07_AF_HSI2C_SCL） */
-#define HSI2C_GPIO_PIN06_SEL    (0x1u)  /* PA06 AF1 = HSI2C_SDA */
-#define HSI2C_GPIO_PIN07_SEL    (0x1u)  /* PA07 AF1 = HSI2C_SCL */
-#define HSI2C_GPIO_LSEL         (0u)    /* GPIOAUX_CTRL1.HSI2C_LSEL=0 选择 AF1 引脚位置 */
+/* I2C GPIO 复用配置值 */
+#define HSI2C_GPIO_LSEL         (0u)    /* GPIOAUX_CTRL1.HSI2C_LSEL=0 选择 PA06/PA07 位置 */
 
 /* FLASH写序列，每次FLASH寄存器修改，都需调用此序列 */
 #define FLASH_BYPASS() \
@@ -180,7 +179,7 @@ __STATIC_INLINE void HC32_GpioInit(void)
     GPIOA->OUT_f.PIN06 = 1;             /* 默认高 */
     GPIOA->OD_f.PIN06  = 1;             /* 开漏 */
     GPIOA->ADS_f.PIN06 = 0;             /* 数字功能 */
-    GPIOA->PIN06_SEL   = HSI2C_GPIO_PIN06_SEL;
+    GPIO_PA06_AF_HSI2C_SDA();           /* 官方写法：PA06 AF1 = HSI2C_SDA */
 
     /* 配置PA07为HSI2C_SCL：开漏输出 + 复用功能（外部上拉） */
     /* SCL 平时由主机驱动，Clock Stretching 时 HSI2C 内部拉低，需开漏模式 */
@@ -188,7 +187,7 @@ __STATIC_INLINE void HC32_GpioInit(void)
     GPIOA->OUT_f.PIN07 = 1;             /* 默认高 */
     GPIOA->OD_f.PIN07  = 1;             /* 开漏 */
     GPIOA->ADS_f.PIN07 = 0;
-    GPIOA->PIN07_SEL   = HSI2C_GPIO_PIN07_SEL;
+    GPIO_PA07_AF_HSI2C_SCL();           /* 官方写法：PA07 AF1 = HSI2C_SCL */
 }
 
 /**
