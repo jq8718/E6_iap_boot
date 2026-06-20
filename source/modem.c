@@ -139,19 +139,19 @@ void MODEM_I2cIrqHandler(void)
 {
     uint32_t u32Flags = HSI2C->SSR;
 
-    /* Address valid / repeated start: a transaction is active */
+    /* Address valid / repeated start */
     if (u32Flags & (HSI2C_SLAVE_FLAG_AVF | HSI2C_SLAVE_FLAG_RSF))
     {
         s_bTransactionActive = TRUE;
-        s_u8TxLenByteIdx     = 0u;
         (void)HSI2C->SASR; /* Read SASR to clear AVF */
     }
 
-    /* STOP: transaction ended */
+    /* STOP: transaction ended, reset state */
     if (u32Flags & HSI2C_SLAVE_FLAG_SDF)
     {
         s_bTransactionActive = FALSE;
         s_bSubAddrValid      = FALSE;
+        s_u8TxLenByteIdx     = 0u;
     }
 
     /* Receive data */
@@ -234,14 +234,17 @@ void MODEM_I2cIrqHandler(void)
                 break;
 
             case REG_TX_LEN:
-                if (0u == s_u8TxLenByteIdx)
+                if (STATUS_RESP_READY == s_u8RegStatus)
                 {
-                    u8TxData         = (uint8_t)s_u16RegTxLen;
-                    s_u8TxLenByteIdx = 1u;
-                }
-                else
-                {
-                    u8TxData = (uint8_t)(s_u16RegTxLen >> 8);
+                    if (0u == s_u8TxLenByteIdx)
+                    {
+                        u8TxData         = (uint8_t)s_u16RegTxLen;
+                        s_u8TxLenByteIdx = 1u;
+                    }
+                    else
+                    {
+                        u8TxData = (uint8_t)(s_u16RegTxLen >> 8);
+                    }
                 }
                 break;
 
