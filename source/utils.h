@@ -155,8 +155,8 @@ extern "C" {
 /*===================================================================
  *  Interrupt Handler Name Redefinition
  *===================================================================*/
-#define MODEM_I2cIrqHandler(void) Hsi2c_IRQHandler(void)    /* I2C slave ISR */
-#define MODEM_TimIrqHandler(void) Ctim0_IRQHandler(void)    /* Timer ISR (1ms) */
+#define MODEM_I2cIrqHandler(void) HSI2C_IRQHandler(void)    /* I2C slave ISR */
+#define MODEM_TimIrqHandler(void) CTIM0_IRQHandler(void)    /* Timer ISR (1ms) */
 
 /*******************************************************************************
  * Global variable definitions ('extern')
