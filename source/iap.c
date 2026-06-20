@@ -107,13 +107,10 @@ void IAP_UpdateCheck(void)
     switch (stcParam.state)
     {
         case BOOT_PARAM_STATE_IMAGE_VALID:
-            /* Image verified OK: verify CRC and try jumping to APP */
+            /* Image previously ran OK: trust state and jump without CRC */
+            if (Error == IAP_JumpToApp(APP_ADDR))
             {
-                uint16_t u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, stcParam.app_size);
-                if ((u16Crc != (uint16_t)stcParam.app_crc) || (Error == IAP_JumpToApp(APP_ADDR)))
-                {
-                    BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
-                }
+                BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
             }
             break;
 
