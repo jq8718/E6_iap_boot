@@ -1,0 +1,647 @@
+# HC32L021 I2C IAP Bootloader 协议规格
+
+> 基于 `I2C_IAP_Bootloader_Design.md` 讨论迭代后的最终协议规格。
+
+---
+
+## 1. I2C 从机配置
+
+### 1.1 硬件要求
+
+| 参数 | 值 | 说明 |
+|------|------|------|
+| Sub-address | **1 字节** | `u8SubAddrSize = 1`，用于虚拟寄存器寻址 |
+| SCL Stall | **必须启用** | `TXDSTALL`, `RXSTALL`, `ACKSTALL` 全部使能 |
+| 从机地址 | 自定义 | 7-bit 或 10-bit，不与总线其他器件冲突 |
+| 时钟源 | 系统时钟 | HC32L021 上电默认 4MHz → Boot 初始化后 48MHz |
+
+### 1.2 SCL Clock Stretching 作用
+
+Flash 擦写期间 CPU 被 Stall，I2C ISR 无法执行。启用 SCL Stall 后，I2C 硬件自动拉低 SCL 等待 CPU 恢复，避免 NACK。
+
+```c
+// HSI2C 从机初始化关键配置
+stcSlaveInit.u8SubAddrSize = 1;
+stcSlaveInit.stcSlaveConfig1.u32FuncSelect =
+    HSI2C_SLAVE_TXDSTALL_ENABLE  |   // 发送数据时允许 Stall SCL
+    HSI2C_SLAVE_RXSTALL_ENABLE   |   // 接收数据时允许 Stall SCL
+    HSI2C_SLAVE_ACKSTALL_ENABLE;     // ACK 阶段允许 Stall SCL
+```
+
+---
+
+## 2. 虚拟寄存器
+
+Bootloader 作为 I2C 从机，通过 1 字节 sub-address 映射虚拟寄存器。
+
+### 2.1 寄存器表
+
+| 地址 | 名称 | 方向 | 字节数 | 说明 |
+|------|------|------|--------|------|
+| `0x00` | `STATUS` | R | 1 | Boot 当前状态 |
+| `0x01` | `ERROR` | R | 1 | 最近错误码 |
+| `0x02` | `CTRL` | W | 1 | 控制命令 |
+| `0x03` ~ `0x05` | *保留* | R/W | — | 读取返回 `0x00`，写入被忽略 |
+| `0x06` | `TX_LEN` | R | 2 | 响应帧长度，小端 |
+| `0x08` ~ `0x0F` | *保留* | R/W | — | 读取返回 `0x00`，写入被忽略 |
+| `0x20` ~ `0x231` | `MAILBOX` | W/R | 530 | 请求帧写入 / 响应帧读取 |
+
+**MAILBOX 地址范围**：`0x20` = MAILBOX[0]，`0x21` = MAILBOX[1]，…，`0x231` = MAILBOX[529]。写入时地址自动增量——主机写入起始地址后，连续数据字节依次填充后续偏移。
+
+### 2.2 STATUS
+
+| 值 | 名称 | 说明 |
+|------|------|------|
+| `0x00` | `IDLE` | 空闲，可写 MAILBOX |
+| `0x02` | `BUSY` | 正在执行（Flash 擦写 / CRC / 跳转准备），勿写 MAILBOX |
+| `0x03` | `RESP_READY` | 响应已就绪，主机可读 |
+| `0x04` | `ERROR` | 出错，读取 `ERROR` 获取错误码 |
+
+状态转换：
+
+```text
+IDLE ──(COMMIT)──→ BUSY ──(成功)──→ RESP_READY ──(CLEAR)──→ IDLE
+                     │                                       │
+                     └──(失败)──→  ERROR  ──(CLEAR/ABORT)──→ IDLE
+```
+
+### 2.3 ERROR
+
+| 值 | 名称 | 说明 |
+|------|------|------|
+| `0x00` | `OK` | 无错误 |
+| `0x01` | `CRC_ERROR` | 请求帧 CRC 校验失败 |
+| `0x02` | `FRAME_ERROR` | Magic、PayloadLen 或 Version 非法 |
+| `0x03` | `UNSUPPORTED_CMD` | 不支持的命令码 |
+| `0x04` | `ADDR_ERROR` | Flash 地址非法或越界 |
+| `0x05` | `FLASH_ERROR` | Flash 擦写失败 |
+| `0x06` | `BUSY_ERROR` | 当前状态不允许此操作 |
+| `0x07` | `SEQ_ERROR` | 序号重复或非法 |
+| `0x08` | `APP_INVALID` | APP 向量表检查不通过 |
+
+`ERROR` 与响应帧 `Payload[0]` 的错误码值保持一致。`ERROR` 是轻量级快速诊断通道——主机在轮询到 `STATUS == ERROR` 时可直接读 `ERROR` 寄存器判断错误类型，无需读取完整响应帧。也可以跳过 `ERROR`，直接从响应帧 `Payload[0]` 获取权威错误码。
+
+### 2.4 CTRL
+
+| 值 | 名称 | 说明 |
+|------|------|------|
+| `0xA5` | `COMMIT` | 提交 MAILBOX 内容，Boot 开始解析执行。`STATUS == BUSY` 时忽略 |
+| `0x5A` | `CLEAR` | 主机已读完响应，Boot 清状态回 `IDLE` |
+| `0xC3` | `ABORT` | 放弃当前操作，状态回 `IDLE` |
+
+### 2.5 TX_LEN
+
+只读，2 字节小端。值由 Boot 在构造响应帧后设置。仅 `STATUS == RESP_READY` 时有效。
+
+### 2.6 MAILBOX
+
+数据窗口。写入和读取都从指定偏移开始，后续字节自动增量。START-STOP 之间可写任意长度，支持分多次 I2C 事务写入完整请求帧。
+
+写入规则：
+
+- 仅 `STATUS == IDLE` 时允许写入。非 IDLE 时写入可能导致数据丢弃。
+- 主机可写入 `0x20` ~ `0x231` 范围内的任意起始地址。同一事务内连续字节地址自动增量。
+- 写入同一地址会覆盖该位置已有数据。多次写入不同地址段互相独立（例如先写 `0x20~0x4F`，再写 `0x50~0xFF`，两次写入互不影响）。
+- 写入内容在 `COMMIT` 之前不会被解析。
+
+读取规则：
+
+- 仅 `STATUS == RESP_READY` 时有效。非 RESP_READY 时读取的数据无协议意义。
+- 从任意偏移开始读取均可，但正常流程从 `0x20`（MAILBOX[0]）开始读。
+
+---
+
+## 3. 帧格式
+
+### 3.1 请求帧
+
+**定长 8 字节 Header + 可变 Payload + 2 字节 CRC16**。
+
+```
+Offset  Size  Name        说明
+  0      1    Magic0      固定 0x6D
+  1      1    Magic1      固定 0xAC
+  2      1    Version     协议版本，当前 0x01
+  3      1    Cmd         命令码
+  4      1    Seq         帧序号，主机自增，Boot 回显
+  5      1    Flags       选项位，当前固定 0x00
+  6      2    PayloadLen  Payload 字节数，小端，范围 0~512
+  8     N     Payload     命令参数，内容由 Cmd 决定
+  8+N   2     CRC16       校验 Header[0..7] + Payload[0..N-1]
+```
+
+**解析规则**：
+
+```c
+payload_len = MAILBOX[6] | (MAILBOX[7] << 8);
+crc_offset  = 8 + payload_len;                     // CRC 在 Payload 之后
+crc_recv    = MAILBOX[crc_offset] | (MAILBOX[crc_offset + 1] << 8);
+crc_calc    = CRC16(MAILBOX, crc_offset);          // 覆盖 Header + Payload
+```
+
+**校验顺序**：
+1. `PayloadLen` 合法（`0` ~ `IAP_PAYLOAD_MAX`）
+2. Magic 匹配
+3. Version 匹配
+4. Flags 为 `0x00`
+5. CRC16 通过
+
+### 3.2 响应帧
+
+同样的 8 字节 Header + Payload + CRC16 结构。
+
+```
+Offset  Size  Name        说明
+  0      1    Magic0      固定 0x6D
+  1      1    Magic1      固定 0xAC
+  2      1    Version     协议版本
+  3      1    Cmd         回显请求 Cmd
+  4      1    Seq         回显请求 Seq
+  5      1    Flags       选项位，固定 0x00（保留）
+  6      2    PayloadLen  Payload 字节数，小端
+  8     N     Payload     响应数据，内容由 Cmd 决定
+  8+N   2     CRC16       校验 Header + Payload
+```
+
+**结果通过 Payload[0] 表示**：
+
+所有响应帧 `PayloadLen >= 1`，`Payload[0]` 为结果码，值与 `ERROR` 寄存器一致：
+
+| Payload[0] | 含义 |
+|-----------|------|
+| `0x00` | OK，无错误 |
+| `0x01` ~ `0x08` | 对应 ERROR 码 |
+
+`PayloadLen = 1` 时为纯错误响应。`PayloadLen > 1` 时 `Payload[0]` 仍为结果码，`Payload[1..]` 为命令返回数据。
+
+**各命令响应 Payload（成功时）**：
+
+| Cmd | PayloadLen | Payload 内容 |
+|------|-----------|------|
+| HANDSHAKE | 4 | `[0]=OK` `[1]=协议版本` `[2:3]=PAYLOAD_MAX` |
+| ERASE_FLASH | 1 | `[0]=OK` |
+| APP_DOWNLOAD | 1 | `[0]=OK` |
+| CRC_FLASH | 3 | `[0]=OK` `[1:2]=Flash CRC16` |
+| JUMP_TO_APP | 1 | `[0]=OK` |
+
+**所有命令失败时**：`PayloadLen = 1`，`Payload[0] = 错误码`（值与 ERROR 寄存器一致）。
+
+---
+
+## 4. CRC16 算法
+
+与现有 UART Bootloader `HC32_CalCrc16()` 一致。
+
+| 参数 | 值 |
+|------|------|
+| 初始值 | `0xA28C` |
+| 多项式 | `0x1021` (CRC-CCITT)，右移实现用反射多项式 `0x8408` |
+| 处理 | LSB-first，每字节 `crc ^= byte` 后迭代 8 次 |
+| 输出 | `~crc`（按位取反） |
+| 帧内字节序 | 小端，低字节在前 |
+
+```c
+static uint16_t IAP_Crc16(const uint8_t *data, uint32_t len)
+{
+    uint8_t  i;
+    uint16_t crc = 0xA28Cu;
+
+    while (len-- != 0u) {
+        crc ^= *data++;
+        for (i = 0u; i < 8u; i++) {
+            if (crc & 0x0001u)
+                crc = (crc >> 1) ^ 0x8408u;
+            else
+                crc >>= 1;
+        }
+    }
+    return (uint16_t)(~crc);
+}
+```
+
+---
+
+## 5. 命令定义
+
+### 5.1 命令总表
+
+| Cmd | 名称 | Payload | PayloadLen | 帧总长 |
+|------|------|---------|-----------|--------|
+| `0x20` | HANDSHAKE | 无 | 0 | 10 |
+| `0x24` | ERASE_FLASH | AppSize(4) | 4 | 14 |
+| `0x22` | APP_DOWNLOAD | FlashAddr(4) + 固件数据 | 4+N | 14+N |
+| `0x25` | CRC_FLASH | AppSize(4) | 4 | 14 |
+| `0x21` | JUMP_TO_APP | 无 | 0 | 10 |
+
+### 5.2 各命令 Payload 结构
+
+**HANDSHAKE**：
+
+```
+Payload: 无 (PayloadLen = 0)
+```
+
+**ERASE_FLASH**：
+
+```
+Payload[0:3]  AppSize  uint32 LE  固件长度（= app_size）
+```
+
+擦除目标固定为 `APP_ADDR`。Boot 内部做扇区对齐——实际擦除 `ceil(AppSize / 512)` 个扇区。
+
+**APP_DOWNLOAD**：
+
+```
+Payload[0:3]  FlashAddr  uint32 LE  写入目标地址
+Payload[4:N]  Firmware   bytes      固件数据，N = PayloadLen - 4
+```
+
+**CRC_FLASH**：
+
+```
+Payload[0:3]  AppSize  uint32 LE  固件长度（= app_size）
+```
+
+校验起始地址固定为 `APP_ADDR`，校验范围 `[APP_ADDR, APP_ADDR + AppSize)`。
+
+**JUMP_TO_APP**：
+
+```
+Payload: 无 (PayloadLen = 0)
+```
+
+---
+
+## 6. 命令事务流程
+
+每条命令遵循统一的 I2C 事务序列。以下均为 **Master 视角**。
+
+### 6.1 单条命令标准事务
+
+```text
+1.  Master Read STATUS
+    S + SLA(W) + 0x00 + Sr + SLA(R) + status + P
+    要求 STATUS == IDLE
+
+2.  Master Write MAILBOX request
+    S + SLA(W) + 0x20 + request_frame[frame_len] + P
+    可一次写完或分多次写入（从对应偏移地址开始）
+
+3.  Master Write CTRL = COMMIT
+    S + SLA(W) + 0x02 + 0xA5 + P
+
+4.  Master Poll STATUS
+    S + SLA(W) + 0x00 + Sr + SLA(R) + status + P
+    STATUS == BUSY      → 延时后重试（Flash 操作时允许短时 NACK）
+    STATUS == RESP_READY → 下一步
+    STATUS == ERROR     → 读 ERROR，终止或重试
+
+5.  Master Read TX_LEN
+    S + SLA(W) + 0x06 + Sr + SLA(R) + tx_len_l + tx_len_h + P
+    检查 TX_LEN >= 10 且 TX_LEN <= 530
+
+6.  Master Read MAILBOX response
+    S + SLA(W) + 0x20 + Sr + SLA(R) + response_frame[TX_LEN] + P
+
+7.  校验响应 CRC16、Cmd、Seq
+
+8.  Master Write CTRL = CLEAR
+    S + SLA(W) + 0x02 + 0x5A + P
+```
+
+### 6.2 轮询期间的异常处理
+
+Flash 操作期间 CPU Stall 导致 I2C 短时无响应，**不应立即判定失败**：
+
+| 观察 | 处理 |
+|------|------|
+| I2C NACK | 按 BUSY 处理，延时 ≥ 5ms 后重试 |
+| I2C timeout | 同上 |
+| STATUS == ERROR | 读 ERROR 寄存器，判断是否可恢复 |
+| 总超时耗尽 | 判定命令失败，ABORT 后重新开始 |
+
+---
+
+## 7. 升级流程
+
+```text
+1. HANDSHAKE
+   获取协议版本和 PAYLOAD_MAX
+
+2. ERASE_FLASH
+   AppSize = app_size
+   Boot 内部做扇区对齐，擦除 >= app_size 的最小扇区数
+
+3. APP_DOWNLOAD × N
+   offset = 0
+   while offset < app_size:
+       chunk_len = min(app_size - offset, PAYLOAD_MAX - 4)
+       Payload = FlashAddr(4) + app_bin[offset : offset + chunk_len]
+       offset += chunk_len
+
+4. CRC_FLASH
+   AppSize = app_size
+   Boot 计算 CRC → 存 app_size/app_crc 到参数区 → 返回 CRC
+   主机比对 Flash CRC 与本地 CRC
+
+5. JUMP_TO_APP
+   Boot 重算 CRC → 与参数区 app_crc 比对 → 向量表检查 → 写 IMAGE_PENDING → 跳转
+```
+
+---
+
+## 8. 帧示例
+
+### 8.1 HANDSHAKE
+
+请求帧（10 字节，一次 I2C 写入）：
+
+```text
+S + SLA(W) + 0x20 +
+  6D AC        Magic
+  01           Version
+  20           Cmd = HANDSHAKE
+  01           Seq
+  00           Flags
+  00 00        PayloadLen = 0
+  ## ##        CRC16
++ P
+```
+
+响应帧（14 字节）：
+
+```text
+S + SLA(W) + 0x20 + Sr + SLA(R) +
+  6D AC        Magic
+  01           Version
+  20           Cmd (回显)
+  01           Seq (回显)
+  00           Flags
+  04 00        PayloadLen = 4
+  00           Payload[0] = OK
+  01           Payload[1] = 协议版本 0x01
+  00 02        Payload[2:3] = PAYLOAD_MAX = 512
+  ## ##        CRC16
++ P
+```
+
+### 8.2 ERASE_FLASH
+
+请求帧（14 字节）：
+
+```text
+S + SLA(W) + 0x20 +
+  6D AC        Magic
+  01           Version
+  24           Cmd = ERASE_FLASH
+  02           Seq
+  00           Flags
+  04 00        PayloadLen = 4
+  00 50 00 00  Payload[0:3] AppSize = app_size（例如 20KB = 0x5000）
+  ## ##        CRC16
++ P
+```
+
+响应帧（11 字节）：
+
+```text
+S + SLA(W) + 0x20 + Sr + SLA(R) +
+  6D AC 01 24 02 00 01 00 00 ## ##
+  ↑              ↑  ↑     ↑  ↑
+  Header(6B)     PL=1 OK   CRC16
++ P
+```
+
+### 8.3 APP_DOWNLOAD（256 字节数据）
+
+请求帧（270 字节）：
+
+```text
+S + SLA(W) + 0x20 +
+  6D AC        Magic
+  01           Version
+  22           Cmd = APP_DOWNLOAD
+  05           Seq
+  00           Flags
+  04 01        PayloadLen = 260 (= 4 + 256)
+  00 10 00 00  Payload[0:3] FlashAddr = 0x00001000
+  [256 bytes]  Payload[4:259] 固件数据
+  ## ##        CRC16
++ P
+```
+
+也可以分两次写入（每包 128 字节数据 + 4 字节 FlashAddr = 132 字节 payload）：
+
+```text
+Part1: S + SLA(W) + 0x20 +  [Header(8) + FlashAddr(4) + Firmware[0:127]]   + P
+                            ↑ 从 0x20 写，自动增量到 0xAB
+Part2: S + SLA(W) + 0xAC +  [Firmware[128:255] + CRC16(2)]                  + P
+                            ↑ 从 0xAC 继续写
+```
+
+### 8.4 CRC_FLASH
+
+请求帧（14 字节）：
+
+```text
+S + SLA(W) + 0x20 +
+  6D AC        Magic
+  01           Version
+  25           Cmd = CRC_FLASH
+  06           Seq
+  00           Flags
+  04 00        PayloadLen = 4
+  00 50 00 00  Payload[0:3] AppSize = app_size（例如 20KB = 0x5000）
+  ## ##        CRC16
++ P
+```
+
+响应帧（13 字节）：
+
+```text
+S + SLA(W) + 0x20 + Sr + SLA(R) +
+  6D AC        Magic
+  01           Version
+  25           Cmd (回显)
+  06           Seq (回显)
+  00           Flags
+  03 00        PayloadLen = 3
+  00           Payload[0] = OK
+  ## ##        Payload[1:2] = Flash CRC16 小端
+  ## ##        CRC16
++ P
+```
+
+### 8.5 JUMP_TO_APP
+
+请求帧（10 字节）：
+APP固件长度，APP固件CRC，应该记录在bootload中，CRC_FLASH时下发APP固件长度，boot计算CRC后
+```text
+S + SLA(W) + 0x20 +
+  6D AC 01 21 07 00 00 00 ## ##
+  ↑                        ↑
+  Header(8B) PayloadLen=0  CRC16
++ P
+```
+
+响应帧（11 字节）：
+
+```text
+S + SLA(W) + 0x20 + Sr + SLA(R) +
+  6D AC 01 21 07 00 01 00 00 ## ##
++ P
+
+Master Write CTRL = CLEAR:
+S + SLA(W) + 0x02 + 0x5A + P
+
+→ Boot 延时 5ms，复位外设，跳 APP。此后无 Bootloader 响应。
+```
+
+### 8.6 错误响应示例（ERASE_FLASH 地址未对齐）
+
+```text
+S + SLA(W) + 0x20 + Sr + SLA(R) +
+  6D AC        Magic
+  01           Version
+  24           Cmd (回显)
+  02           Seq (回显)
+  00           Flags
+  01 00        PayloadLen = 1
+  04           Payload[0] = ADDR_ERROR
+  ## ##        CRC16
++ P
+```
+
+---
+
+## 9. 寄存器读写事务格式汇总
+
+| 操作 | I2C 序列 |
+|------|----------|
+| 读 STATUS | `S + SLA(W) + 0x00 + Sr + SLA(R) + 1B + P` |
+| 读 ERROR | `S + SLA(W) + 0x01 + Sr + SLA(R) + 1B + P` |
+| 写 CTRL | `S + SLA(W) + 0x02 + 1B + P` |
+| 读 TX_LEN | `S + SLA(W) + 0x06 + Sr + SLA(R) + 2B + P` |
+| 写 MAILBOX | `S + SLA(W) + 0x20 + NB + P` |
+| 读 MAILBOX | `S + SLA(W) + 0x20 + Sr + SLA(R) + NB + P` |
+
+所有多字节数据传输均小端，地址自动增量。
+
+---
+
+## 10. 命令码空间
+
+| 范围 | 用途 |
+|------|------|
+| `0x20` ~ `0x2F` | 控制类命令（HANDSHAKE, JUMP_TO_APP 等） |
+| `0x22` | APP_DOWNLOAD |
+| `0x24` | ERASE_FLASH |
+| `0x25` | CRC_FLASH |
+| `0x30` ~ `0xFF` | 保留 |
+
+---
+
+## 11. 约束与限制
+
+| 项目 | 限制 | 说明 |
+|------|------|------|
+| MAILBOX 容量 | 530 字节 | PayloadLen ≤ 512，Header 8 + CRC 2 = 10，总 = 8+512+2 = 522 |
+| Payload 上限 | 512 字节 | 主机通过 HANDSHAKE 获取实际值 |
+| APP_DOWNLOAD 单包数据 | ≤ 508 字节 | PayloadLen(512) - FlashAddr(4) |
+| 帧最小长度 | 10 字节 | Header 8 + CRC 2，PayloadLen = 0 |
+| 帧最大长度 | 522 字节 | Header 8 + Payload(512) + CRC 2 |
+| Flash 地址对齐 | 512 字节 | ERASE_FLASH 要求 |
+| 轮询超时 | ≥ 100ms | Flash 操作期间 |
+
+---
+
+## 12. 从机内部实现要点
+
+### 12.1 MAILBOX 写入处理
+
+```c
+// I2C ISR 中
+void HSI2C_IRQHandler(void)
+{
+    uint32_t flag = HSI2Cx->SSR;
+
+    // 接收数据
+    if (flag & HSI2C_SLAVE_FLAG_RDF) {
+        uint8_t data = HSI2Cx->SRDR;
+        if (rx_mailbox_index < IAP_MAILBOX_SIZE)
+            rx_mailbox[rx_mailbox_index++] = data;
+    }
+
+    // STOP 检测
+    if (flag & HSI2C_SLAVE_FLAG_SDF) {
+        if (rx_mailbox_index >= 10)
+            status = IDLE;       // 等待 COMMIT
+        else
+            status = ERROR, error = FRAME_ERROR;
+    }
+
+    // 地址有效 — 记录寄存器地址
+    if (flag & HSI2C_SLAVE_FLAG_AVF) {
+        // 读 SASR 获取 slave address
+        // 用 u8SubAddr[0] 获取寄存器地址
+        if (sub_addr >= 0x20 && sub_addr <= 0x231)
+            rx_mailbox_index = sub_addr - 0x20;  // 从指定偏移开始
+    }
+}
+```
+
+### 12.2 主循环
+
+```c
+void Boot_MainLoop(void)
+{
+    while (1) {
+        if (ctrl_commit_pending && status == IDLE) {
+            status = BUSY;
+            en_result_t ret = ParseAndExecute();      // 帧解析 + Flash 操作
+            BuildResponse(ret);                       // 构造 tx_mailbox
+            tx_len = compute_tx_len();
+            status = (ret == Ok) ? RESP_READY : ERROR;
+        }
+
+        if (ctrl_clear_pending && status == RESP_READY) {
+            status = IDLE;
+            error = OK;
+            tx_len = 0;
+        }
+
+        if (ctrl_abort_pending) {
+            status = IDLE;
+            tx_len = 0;
+        }
+
+        if (jump_pending && cleared) {
+            Delay_ms(5);
+            IAP_ResetConfig();
+            __disable_irq();
+            IAP_JumpToApp(APP_ADDR);
+        }
+    }
+}
+```
+
+### 12.3 掉电保护
+
+ERASE_FLASH 执行前，Boot 内部自动写入 Boot 参数区 `UPDATE_REQUEST`：
+
+```c
+// ERASE_FLASH 命令执行
+if (param.state != UPDATE_REQUEST) {
+    BootParam_WriteState(UPDATE_REQUEST);
+}
+// 然后擦除
+for (each sector) {
+    HC32_FlashEraseSector(sector_addr);
+}
+```
+
+重新上电时读到 `UPDATE_REQUEST` → 留在 Boot → 主机重新发起升级。
+
+---
+
+*协议版本 0x01，最后更新 2026-06-16。*

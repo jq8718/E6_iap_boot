@@ -1,0 +1,11 @@
+--cpu Cortex-M0+
+".\output\release\startup_hc32l021.o"
+".\output\release\interrupts_hc32l021.o"
+".\output\release\main.o"
+".\output\release\iap.o"
+".\output\release\modem.o"
+".\output\release\config_hc32l021.o"
+--library_type=microlib --strict --scatter ".\output\release\iap_boot.sct"
+--keep=*Handler --summary_stderr --info summarysizes --map --load_addr_map_info --symbols
+--info sizes --info totals
+--list ".\output\release\iap_boot.map" -o .\output\release\iap_boot.axf

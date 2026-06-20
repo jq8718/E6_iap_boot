@@ -1,0 +1,39 @@
+# Build outputs
+EWARM/Debug/
+EWARM/Release/
+EWARM/settings/
+EWARM/*.dep
+EWARM/*.ewt
+EWARM/*.ewd
+EWARM/*.ewp.bak
+
+MDK/Objects/
+MDK/Listings/
+MDK/*.uvguix.*
+MDK/*.uvoptx
+MDK/*.scvd
+
+# IAR / Keil generated
+*.o
+*.obj
+*.lst
+*.map
+*.elf
+*.bin
+*.hex
+*.axf
+*.srec
+
+# IDE
+.vscode/
+*.code-workspace
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Keep source
+!source/
+!common/
+!driver/
+!memory/

@@ -1,0 +1,1 @@
+- [I2C IAP 协议设计决策](memory/i2c-iap-protocol-decisions.md) — 2026-06-15~16 协议讨论全记录
