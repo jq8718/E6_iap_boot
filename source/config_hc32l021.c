@@ -175,15 +175,17 @@ __STATIC_INLINE void HC32_GpioInit(void)
     GPIOAUX->CTRL1_f.HSI2C_LSEL = HSI2C_GPIO_LSEL;
 
     /* 配置PA06为HSI2C_SDA：开漏输出 + 复用功能（外部上拉） */
-    GPIOA->DIR_f.PIN06 = 0;             /* 输出方向（开漏模式下可双向） */
+    /* 开漏输出模式下，HSI2C 硬件自动控制方向：发送时驱动低电平，接收时释放 */
+    GPIOA->DIR_f.PIN06 = 0;             /* 输出方向（开漏双向） */
     GPIOA->OUT_f.PIN06 = 1;             /* 默认高 */
     GPIOA->OD_f.PIN06  = 1;             /* 开漏 */
     GPIOA->ADS_f.PIN06 = 0;             /* 数字功能 */
     GPIOA->PIN06_SEL   = HSI2C_GPIO_PIN06_SEL;
 
     /* 配置PA07为HSI2C_SCL：开漏输出 + 复用功能（外部上拉） */
-    GPIOA->DIR_f.PIN07 = 0;
-    GPIOA->OUT_f.PIN07 = 1;
+    /* SCL 平时由主机驱动，Clock Stretching 时 HSI2C 内部拉低，需开漏模式 */
+    GPIOA->DIR_f.PIN07 = 0;             /* 输出（开漏，HIGH = 释放） */
+    GPIOA->OUT_f.PIN07 = 1;             /* 默认高 */
     GPIOA->OD_f.PIN07  = 1;             /* 开漏 */
     GPIOA->ADS_f.PIN07 = 0;
     GPIOA->PIN07_SEL   = HSI2C_GPIO_PIN07_SEL;
