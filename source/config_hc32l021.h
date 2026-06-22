@@ -62,6 +62,11 @@ en_result_t HC32_FlashEraseSector(uint32_t u32SectorAddr);                      
 en_result_t HC32_FlashWriteBytes(uint32_t u32Addr, uint8_t *pu8Data, uint32_t u32Len);           /* FLASH byte write */
 void        HC32_FlashReadBytes(uint32_t u32Addr, uint8_t *pu8ReadBuff, uint32_t u32ByteLength); /* FLASH byte read */
 
+/* Debug UART (LPUART1, PA01 TX only, 115200) */
+void HC32_DbgUartInit(void);
+void HC32_DbgPrint(const char *pstr);
+void HC32_DbgPutHex32(uint32_t u32Val);
+
 #ifdef __cplusplus
 }
 #endif

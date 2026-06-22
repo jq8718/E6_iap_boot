@@ -48,6 +48,18 @@ extern "C" {
 #define I2C_SLAVE_ADDR (0x20u) /* 7-bit I2C slave address, configurable */
 
 /*===================================================================
+ *  Debug Configuration
+ *===================================================================*/
+/* Debug UART output via PA01 LPUART1_TXD (115200 8N1).
+ * 0 = disabled (release build), 1 = enabled (debug build). */
+#define BOOT_DBG_ENABLE (1u)
+#if (BOOT_DBG_ENABLE == 1u)
+    #define BOOT_DBG_PRINT(str)  do { HC32_DbgUartInit(); HC32_DbgPrint(str); } while (0)
+#else
+    #define BOOT_DBG_PRINT(str)
+#endif
+
+/*===================================================================
  *  Clock Configuration
  *===================================================================*/
 #define SYS_CLK_INIT_HZ (48000000u) /* System clock, Hz (Boot init) */
@@ -148,6 +160,7 @@ extern "C" {
 #define CMD_HANDSHAKE    (0x20u) /* Protocol handshake, exchange versions */
 #define CMD_JUMP_TO_APP  (0x21u) /* Verify CRC and jump to APP */
 #define CMD_APP_DOWNLOAD (0x22u) /* Download firmware chunk */
+#define CMD_JUMP_TO_BOOT (0x23u) /* Force reset into bootloader mode */
 #define CMD_ERASE_FLASH  (0x24u) /* Erase APP flash area */
 #define CMD_CRC_FLASH    (0x25u) /* Compute and store Flash CRC */
 

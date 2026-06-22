@@ -68,6 +68,8 @@ void IAP_Main(void)
 {
     en_result_t enRet;
 
+    BOOT_DBG_PRINT("BOOT: start\r\n");
+
     while (1)
     {
         enRet = MODEM_Process(); /* APP程序更新处理 */
@@ -101,25 +103,28 @@ void IAP_UpdateCheck(void)
         BootParam_Init();
 #endif
         /* Stay in bootloader — parameter area must be pre-programmed */
+        BOOT_DBG_PRINT("BOOT: magic mismatch, stay\r\n");
         return;
     }
 
     switch (stcParam.state)
     {
         case BOOT_PARAM_STATE_IMAGE_VALID:
-            /* Image previously ran OK: trust state and jump without CRC */
-            if (Error == IAP_JumpToApp(APP_ADDR))
-            {
-                BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_INVALID);
-            }
+            BOOT_DBG_PRINT("BOOT: IMAGE_VALID, jump\r\n");
+            (void)IAP_JumpToApp(APP_ADDR);
+            BOOT_DBG_PRINT("BOOT: jump failed\r\n");
             break;
 
-        case BOOT_PARAM_STATE_EMPTY:
         case BOOT_PARAM_STATE_UPDATE_REQUEST:
+            BOOT_DBG_PRINT("BOOT: UPDATE_REQUEST, IAP mode\r\n");
+            break;
+
         case BOOT_PARAM_STATE_IMAGE_PENDING:
-        case BOOT_PARAM_STATE_IMAGE_INVALID:
+            BOOT_DBG_PRINT("BOOT: IMAGE_PENDING, IAP mode\r\n");
+            break;
+
         default:
-            /* Stay in Bootloader and wait for host I2C commands */
+            BOOT_DBG_PRINT("BOOT: unknown state\r\n");
             break;
     }
 }
@@ -138,6 +143,7 @@ static en_result_t IAP_JumpToApp(uint32_t u32Addr)
     /* 栈顶地址有效性 */
     if ((u32StackTop <= SRAM_BASE) || (u32StackTop > (SRAM_BASE + RAM_SIZE)))
     {
+        BOOT_DBG_PRINT("BOOT: bad SP\r\n");
         return Error;
     }
 
@@ -146,8 +152,11 @@ static en_result_t IAP_JumpToApp(uint32_t u32Addr)
         (u32ResetHandler >= (APP_ADDR + APP_MAX_SIZE)) ||
         ((u32ResetHandler & 0x1u) == 0u))
     {
+        BOOT_DBG_PRINT("BOOT: bad ResetHandler\r\n");
         return Error;
     }
+
+    BOOT_DBG_PRINT("BOOT: jumping\r\n");
 
     /* 配置跳转到用户程序复位中断入口 */
     u32JumpAddress       = u32ResetHandler;

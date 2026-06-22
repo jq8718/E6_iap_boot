@@ -65,7 +65,7 @@ void BootParam_Init(void)
 
     /* Magic mismatch or first boot — initialize with defaults */
     stcParam.magic       = BOOT_PARAM_MAGIC;
-    stcParam.state       = BOOT_PARAM_STATE_EMPTY;
+    stcParam.state       = BOOT_PARAM_STATE_UPDATE_REQUEST;
     stcParam.app_addr    = APP_ADDR;
     stcParam.app_size    = 0u;
     stcParam.app_crc     = 0u;
@@ -127,8 +127,9 @@ en_result_t BootParam_WriteState(uint32_t u32State)
     stc_boot_param_t stcParam;
 
     BootParam_Read(&stcParam);
-    stcParam.magic  = BOOT_PARAM_MAGIC;   /* Always restore magic */
-    stcParam.state  = u32State;
+    stcParam.magic     = BOOT_PARAM_MAGIC;   /* Always restore fixed fields */
+    stcParam.app_addr  = APP_ADDR;
+    stcParam.state     = u32State;
     stcParam.header_crc = BootParam_CalcHeaderCrc(&stcParam);
 
     return BootParam_Write(&stcParam);
@@ -150,6 +151,8 @@ en_result_t BootParam_WriteAppInfo(uint32_t u32Size, uint16_t u16Crc)
 
     BootParam_Read(&stcParam);
 
+    stcParam.magic     = BOOT_PARAM_MAGIC;  /* Always restore fixed fields */
+    stcParam.app_addr  = APP_ADDR;
     stcParam.app_size  = u32Size;
     stcParam.app_crc   = (uint32_t)u16Crc;  /* Store in low 16 bits */
     stcParam.header_crc = BootParam_CalcHeaderCrc(&stcParam);

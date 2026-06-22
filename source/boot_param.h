@@ -50,14 +50,9 @@ typedef struct
 #define BOOT_PARAM_MAGIC        ((uint32_t)0x48434C42u)
 
 /* State machine values (mutually exclusive, stored in Flash) */
-#define BOOT_PARAM_STATE_EMPTY            ((uint32_t)0xFFFFFFFFu)  /* Flash erased state */
-#define BOOT_PARAM_STATE_UPDATE_REQUEST   ((uint32_t)0xA5A55A5Au)  /* Host requested update */
-#define BOOT_PARAM_STATE_IMAGE_PENDING    ((uint32_t)0x5AA55AA5u)  /* Image written, pending verify */
-#define BOOT_PARAM_STATE_IMAGE_VALID      ((uint32_t)0x55AAAA55u)  /* Image verified OK */
-#define BOOT_PARAM_STATE_IMAGE_INVALID    ((uint32_t)0xDEAD0001u)  /* Image verified FAIL */
-
-/* Boot pending retry max — single attempt (no auto-retry) */
-#define BOOT_PENDING_RETRY_MAX  (0u)
+#define BOOT_PARAM_STATE_UPDATE_REQUEST   ((uint32_t)0xA5A55A5Au)  /* APP requested bootloader stay for IAP */
+#define BOOT_PARAM_STATE_IMAGE_PENDING    ((uint32_t)0x5AA55AA5u)  /* JUMP_TO_APP passed CRC/vector check */
+#define BOOT_PARAM_STATE_IMAGE_VALID      ((uint32_t)0x55AAAA55u)  /* APP confirmed running OK */
 
 /*===================================================================
  *  Boot Parameter Area Initialization Policy

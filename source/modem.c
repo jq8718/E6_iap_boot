@@ -55,6 +55,7 @@ static stc_cmd_result_t CmdEraseFlash(const uint8_t *pu8Payload, uint16_t u16Pay
 static stc_cmd_result_t CmdAppDownload(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
 static stc_cmd_result_t CmdCrcFlash(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
 static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16PayloadLen);
+static void            CmdAppDownloadLog(uint32_t u32FlashAddr);
 
 /*******************************************************************************
  * Local variable definitions ('static')
@@ -84,6 +85,9 @@ static volatile boolean_t s_bCtrlAbort;
 static volatile boolean_t s_bJumpPending;
 static volatile boolean_t s_bClearedAfterJump;
 
+/* APP_DOWNLOAD packet counter (for debug log) */
+static uint32_t s_u32DownloadCount;
+
 /* 1ms tick counter (incremented by timer ISR) */
 static volatile uint32_t s_u32TickMs;
 
@@ -110,6 +114,7 @@ void MODEM_RamInit(void)
     s_bCtrlAbort         = FALSE;
     s_bJumpPending       = FALSE;
     s_bClearedAfterJump  = FALSE;
+    s_u32DownloadCount   = 0u;
     s_u32TickMs          = 0u;
 
     (void)memset(s_au8RxMailbox, 0, sizeof(s_au8RxMailbox));
@@ -406,10 +411,12 @@ en_result_t MODEM_Process(void)
         switch (u8Cmd)
         {
             case CMD_HANDSHAKE:
+                BOOT_DBG_PRINT("BOOT: HANDSHAKE\r\n");
                 stcResult = CmdHandshake();
                 break;
 
             case CMD_ERASE_FLASH:
+                BOOT_DBG_PRINT("BOOT: ERASE_FLASH\r\n");
                 stcResult = CmdEraseFlash(pu8ReqPayload, u16PayloadLen);
                 break;
 
@@ -418,10 +425,12 @@ en_result_t MODEM_Process(void)
                 break;
 
             case CMD_CRC_FLASH:
+                BOOT_DBG_PRINT("BOOT: CRC_FLASH\r\n");
                 stcResult = CmdCrcFlash(pu8ReqPayload, u16PayloadLen);
                 break;
 
             case CMD_JUMP_TO_APP:
+                BOOT_DBG_PRINT("BOOT: JUMP_TO_APP\r\n");
                 stcResult = CmdJumpToApp(pu8ReqPayload, u16PayloadLen);
                 break;
 
@@ -492,6 +501,19 @@ en_result_t MODEM_Process(void)
 }
 
 /**
+ * @brief  APP_DOWNLOAD progress log (every 32 packets)
+ * @param  [in] u32FlashAddr  Current write address
+ * @retval None
+ */
+static void CmdAppDownloadLog(uint32_t u32FlashAddr)
+{
+    s_u32DownloadCount++;
+    BOOT_DBG_PRINT("BOOT: write @0x");
+    HC32_DbgPutHex32(u32FlashAddr);
+    BOOT_DBG_PRINT("\r\n");
+}
+
+/**
  * @brief  HANDSHAKE command handler
  * @retval stc_cmd_result_t
  */
@@ -538,13 +560,6 @@ static stc_cmd_result_t CmdEraseFlash(const uint8_t *pu8Payload, uint16_t u16Pay
     if ((u32AppSize == 0u) || (u32AppSize > APP_MAX_SIZE))
     {
         stcResult.u8ErrCode = ERROR_CODE_ADDR;
-        return stcResult;
-    }
-
-    /* Power-loss protection: mark UPDATE_REQUEST before erasing */
-    if (Ok != BootParam_WriteState(BOOT_PARAM_STATE_UPDATE_REQUEST))
-    {
-        stcResult.u8ErrCode = ERROR_CODE_FLASH;
         return stcResult;
     }
 
@@ -606,6 +621,8 @@ static stc_cmd_result_t CmdAppDownload(const uint8_t *pu8Payload, uint16_t u16Pa
         stcResult.u8ErrCode = ERROR_CODE_FLASH;
         return stcResult;
     }
+
+    CmdAppDownloadLog(u32FlashAddr);
 
     return stcResult;
 }
@@ -678,6 +695,7 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
 
     if (u16PayloadLen != 0u)
     {
+        BOOT_DBG_PRINT("BOOT: JTA bad len\r\n");
         stcResult.u8ErrCode = ERROR_CODE_FRAME;
         return stcResult;
     }
@@ -687,6 +705,7 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
     /* Boot parameter area integrity check */
     if (BOOT_PARAM_MAGIC != stcParam.magic)
     {
+        BOOT_DBG_PRINT("BOOT: JTA bad magic\r\n");
         stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
         return stcResult;
     }
@@ -695,6 +714,7 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
         uint16_t u16HeaderCrc = BootParam_CalcHeaderCrc(&stcParam);
         if (u16HeaderCrc != (uint16_t)stcParam.header_crc)
         {
+            BOOT_DBG_PRINT("BOOT: JTA bad hcrc\r\n");
             stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
             return stcResult;
         }
@@ -703,6 +723,7 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
     /* No firmware size: reject */
     if (0u == stcParam.app_size)
     {
+        BOOT_DBG_PRINT("BOOT: JTA size=0\r\n");
         stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
         return stcResult;
     }
@@ -711,6 +732,7 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
     u16Crc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, stcParam.app_size);
     if (u16Crc != (uint16_t)stcParam.app_crc)
     {
+        BOOT_DBG_PRINT("BOOT: JTA CRC fail\r\n");
         stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
         return stcResult;
     }
@@ -719,9 +741,12 @@ static stc_cmd_result_t CmdJumpToApp(const uint8_t *pu8Payload, uint16_t u16Payl
     u32StackTop = *((volatile uint32_t *)APP_ADDR);
     if ((u32StackTop < SRAM_BASE) || (u32StackTop > (SRAM_BASE + RAM_SIZE)))
     {
+        BOOT_DBG_PRINT("BOOT: JTA bad SP\r\n");
         stcResult.u8ErrCode = ERROR_CODE_APP_INVALID;
         return stcResult;
     }
+
+    BOOT_DBG_PRINT("BOOT: JTA OK, writing PENDING\r\n");
 
     /* Mark image as pending (single attempt, no retry) */
     if (Ok != BootParam_WriteState(BOOT_PARAM_STATE_IMAGE_PENDING))

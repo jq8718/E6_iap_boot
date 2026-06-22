@@ -25,6 +25,7 @@
 #include "hsi2c.h"
 #include "gpio.h"
 #include "sysctrl.h"
+#include "lpuart.h"
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
@@ -319,6 +320,87 @@ uint32_t HC32_CalCrc16(uint8_t *pu8Data, uint32_t u32Offset, uint32_t u32Size)
 
     return u16CrcResult;
 }
+
+/**
+ * @brief  Debug UART init (LPUART1, PA01 TX, 115200)
+ * @retval None
+ */
+#if (BOOT_DBG_ENABLE == 1u)
+void HC32_DbgUartInit(void)
+{
+    static boolean_t s_bInitDone = FALSE;
+
+    if (s_bInitDone)
+    {
+        return;
+    }
+    s_bInitDone = TRUE;
+
+    SYSCTRL_PeriphClockEnable(PeriphClockLpuart1);
+    SYSCTRL_PeriphClockEnable(PeriphClockGpio);
+
+    /* PA01 = LPUART1_TXD, AF1 */
+    /* Pull PA01 high first to avoid \0 garbage during pin mode transition */
+    GPIOA->OUT = GPIO_PIN_01;
+    stc_gpio_init_t stcGpioInit = {0};
+    GPIO_StcInit(&stcGpioInit);
+    stcGpioInit.u32Pin   = GPIO_PIN_01;
+    stcGpioInit.u32Mode  = GPIO_MD_OUTPUT_PP;
+    stcGpioInit.bOutputValue = TRUE;
+    GPIOA_Init(&stcGpioInit);
+    GPIO_PA01_AF_LPUART1_TXD();
+
+    stc_lpuart_init_t stcLpuartInit;
+    LPUART_StcInit(&stcLpuartInit);
+    stcLpuartInit.u32TransMode    = LPUART_MODE_TX;
+    stcLpuartInit.u32FrameLength  = LPUART_FRAME_LEN_8B_NOPAR;
+    stcLpuartInit.u32StopBits     = LPUART_STOPBITS_1;
+    stcLpuartInit.u32HwControl    = LPUART_HWCONTROL_NONE;
+    stcLpuartInit.u32BaudRateGenSelect = LPUART_BAUD_NORMAL;
+    stcLpuartInit.stcBaudRate.u32SclkSelect = LPUART_SCLK_SEL_PCLK;
+    stcLpuartInit.stcBaudRate.u32Sclk = SYS_CLK_INIT_HZ;
+    stcLpuartInit.stcBaudRate.u32Baud = 115200u;
+    LPUART_Init(LPUART1, &stcLpuartInit);
+}
+
+/**
+ * @brief  Debug UART print string (polling, blocking)
+ * @param  [in] pstr  Null-terminated string
+ * @retval None
+ */
+void HC32_DbgPrint(const char *pstr)
+{
+    while (*pstr != '\0')
+    {
+        while (0u == (LPUART1->ISR & LPUART_FLAG_TXE))
+        {
+            ;
+        }
+        LPUART1->SBUF = (uint8_t)(*pstr);
+        pstr++;
+    }
+}
+
+/**
+ * @brief  Debug UART print hex uint32 (8 hex digits)
+ * @param  [in] u32Val  32-bit value to print
+ * @retval None
+ */
+void HC32_DbgPutHex32(uint32_t u32Val)
+{
+    int32_t i;
+    for (i = 7; i >= 0; i--)
+    {
+        uint8_t u8Nyb = (uint8_t)((u32Val >> ((uint32_t)i * 4u)) & 0xFu);
+        uint8_t u8Ch  = (u8Nyb < 10u) ? (uint8_t)('0' + u8Nyb) : (uint8_t)('A' + u8Nyb - 10u);
+        while (0u == (LPUART1->ISR & LPUART_FLAG_TXE))
+        {
+            ;
+        }
+        LPUART1->SBUF = u8Ch;
+    }
+}
+#endif /* BOOT_DBG_ENABLE */
 
 /**
  * @brief  获取定时器溢出中断标志位
