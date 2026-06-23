@@ -22,6 +22,7 @@
  * Include files
  ******************************************************************************/
 #include "iap.h"
+#include "config_hc32l021.h"
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
@@ -46,6 +47,7 @@
  */
 int32_t main(void)
 {
+    HC32_SysClockInit(); /* Switch to 48MHz first — debug serial and all peripherals need correct clock */
     IAP_UpdateCheck();
     IAP_Init();
     IAP_Main();

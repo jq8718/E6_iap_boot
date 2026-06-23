@@ -40,6 +40,7 @@
  ******************************************************************************/
 static en_result_t IAP_JumpToApp(uint32_t u32Addr);
 static void        IAP_ResetConfig(void);
+static en_result_t IAP_VerifyAppCrc(const stc_boot_param_t *pstcParam);
 
 /*******************************************************************************
  * Local variable definitions ('static')
@@ -110,9 +111,17 @@ void IAP_UpdateCheck(void)
     switch (stcParam.state)
     {
         case BOOT_PARAM_STATE_IMAGE_VALID:
-            BOOT_DBG_PRINT("BOOT: IMAGE_VALID, jump\r\n");
-            (void)IAP_JumpToApp(APP_ADDR);
-            BOOT_DBG_PRINT("BOOT: jump failed\r\n");
+            BOOT_DBG_PRINT("BOOT: IMAGE_VALID, CRC check\r\n");
+            if (Ok == IAP_VerifyAppCrc(&stcParam))
+            {
+                BOOT_DBG_PRINT("BOOT: CRC OK, jump\r\n");
+                (void)IAP_JumpToApp(APP_ADDR);
+                BOOT_DBG_PRINT("BOOT: jump failed\r\n");
+            }
+            else
+            {
+                BOOT_DBG_PRINT("BOOT: CRC mismatch, stay\r\n");
+            }
             break;
 
         case BOOT_PARAM_STATE_UPDATE_REQUEST:
@@ -127,6 +136,39 @@ void IAP_UpdateCheck(void)
             BOOT_DBG_PRINT("BOOT: unknown state\r\n");
             break;
     }
+}
+
+/**
+ * @brief  Verify APP CRC16 against boot_param stored value
+ * @param  [in] pstcParam  Boot parameters with app_size/app_crc
+ * @retval en_result_t
+ *           - Ok:  CRC matches
+ *           - Error: app_size=0, check failed, or CRC mismatch
+ */
+static en_result_t IAP_VerifyAppCrc(const stc_boot_param_t *pstcParam)
+{
+    uint16_t u16CalcCrc;
+
+    if (0u == pstcParam->app_size)
+    {
+        BOOT_DBG_PRINT("BOOT: app_size=0\r\n");
+        return Error;
+    }
+
+    BOOT_DBG_PRINT("BOOT: CRC check\r\n");
+#if (BOOT_DBG_ENABLE == 1u)
+    HC32_DbgPutHex32(pstcParam->app_size);
+#endif
+
+    u16CalcCrc = (uint16_t)HC32_CalCrc16((uint8_t *)APP_ADDR, 0u, pstcParam->app_size);
+
+    if (u16CalcCrc != (uint16_t)pstcParam->app_crc)
+    {
+        BOOT_DBG_PRINT("BOOT: CRC fail\r\n");
+        return Error;
+    }
+
+    return Ok;
 }
 
 /**

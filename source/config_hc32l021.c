@@ -82,12 +82,12 @@
 /*******************************************************************************
  * Local function prototypes ('static')
  ******************************************************************************/
-__STATIC_INLINE void HC32_SysClockInit(void);
-__STATIC_INLINE void HC32_SysClockDeInit(void);
-__STATIC_INLINE void HC32_GpioInit(void);
-__STATIC_INLINE void HC32_GpioDeInit(void);
-__STATIC_INLINE void HC32_Btim0Init(void);
-__STATIC_INLINE void HC32_Btim0DeInit(void);
+static void HC32_SysClockDeInit(void);
+void HC32_SysClockInit(void);
+static void HC32_GpioInit(void);
+static void HC32_GpioDeInit(void);
+static void HC32_Btim0Init(void);
+static void HC32_Btim0DeInit(void);
 /*******************************************************************************
  * Local variable definitions ('static')
  ******************************************************************************/
@@ -136,7 +136,7 @@ void HC32_PeriModuleDeInit(void)
  * @brief  系统时钟初始化
  * @retval None
  */
-__STATIC_INLINE void HC32_SysClockInit(void)
+void HC32_SysClockInit(void)
 {
     /* 设置FLASH wait cycle = 1 */
     FLASH_BYPASS();

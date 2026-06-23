@@ -43,6 +43,8 @@ extern "C" {
 /*******************************************************************************
   Global function prototypes (definition in C source)
  ******************************************************************************/
+/* System functions */
+void HC32_SysClockInit(void);     /* System clock init (48MHz), call before any peripheral init */
 void HC32_PeriModuleInit(void);   /* Peripheral init (HSI2C + BTIM0 + GPIO + SysClock) */
 void HC32_PeriModuleDeInit(void); /* Peripheral deinit (reset all to default) */
 
