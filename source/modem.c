@@ -60,10 +60,11 @@ static void            CmdAppDownloadLog(uint32_t u32FlashAddr);
 /*******************************************************************************
  * Local variable definitions ('static')
  ******************************************************************************/
-/* Virtual registers */
-static volatile uint8_t  s_u8RegStatus;     /*!< STATUS register (0x00) */
-static volatile uint8_t  s_u8RegError;      /*!< ERROR register (0x01) */
-static volatile uint16_t s_u16RegTxLen;     /*!< TX_LEN register (0x06) */
+/* Register file — sub-addr 0x00~0x1F mapped as s_au8RegFile[sub_addr] */
+static volatile uint8_t  s_au8RegFile[0x20]; /*!< Virtual register 0x00~0x1F */
+
+/* TX_LEN 16-bit value (split into s_au8RegFile[REG_TX_LEN/LEN_HIGH] for read) */
+static volatile uint16_t s_u16RegTxLen;       /*!< Response frame length */
 
 /* MAILBOX buffers */
 static uint8_t  s_au8RxMailbox[IAP_MAILBOX_SIZE]; /*!< Request frame buffer */
@@ -74,7 +75,6 @@ static volatile uint16_t s_u16RxMailboxIdx;   /*!< Current RX MAILBOX write offs
 static volatile uint16_t s_u16TxMailboxIdx;   /*!< Current TX MAILBOX read offset */
 static volatile uint16_t s_u16SubAddr;        /*!< Current virtual register address */
 static volatile boolean_t s_bSubAddrValid;    /*!< Sub-address received in current transaction */
-static volatile uint8_t  s_u8TxLenByteIdx;    /*!< TX_LEN byte index (0=low, 1=high) */
 
 /* Control flags set by ISR, consumed by MODEM_Process */
 static volatile boolean_t s_bCtrlCommit;
@@ -86,7 +86,9 @@ static volatile boolean_t s_bJumpPending;
 static volatile boolean_t s_bClearedAfterJump;
 
 /* APP_DOWNLOAD packet counter (for debug log) */
+#if (BOOT_DBG_ENABLE == 1u)
 static uint32_t s_u32DownloadCount;
+#endif
 
 /* 1ms tick counter (incremented by timer ISR) */
 static volatile uint32_t s_u32TickMs;
@@ -101,20 +103,25 @@ static volatile uint32_t s_u32TickMs;
  */
 void MODEM_RamInit(void)
 {
-    s_u8RegStatus        = STATUS_IDLE;
-    s_u8RegError         = ERROR_CODE_OK;
-    s_u16RegTxLen        = 0u;
+    /* Clear register file (0x00~0x1F) */
+    (void)memset((void *)s_au8RegFile, 0, sizeof(s_au8RegFile));
+    s_au8RegFile[REG_STATUS]          = STATUS_IDLE;
+    s_au8RegFile[REG_ERROR]           = ERROR_CODE_OK;
+    s_au8RegFile[REG_FW_VERSION_LOW]  = (uint8_t)BOOT_FW_VERSION;
+    s_au8RegFile[REG_FW_VERSION_HIGH] = (uint8_t)((BOOT_FW_VERSION >> 8) | (uint8_t)(FW_VERSION_BOOT_MASK >> 8u));
+    s_u16RegTxLen                     = 0u;
     s_u16RxMailboxIdx    = 0u;
     s_u16TxMailboxIdx    = 0u;
     s_u16SubAddr        = 0u;
     s_bSubAddrValid      = FALSE;
-    s_u8TxLenByteIdx     = 0u;
     s_bCtrlCommit        = FALSE;
     s_bCtrlClear         = FALSE;
     s_bCtrlAbort         = FALSE;
     s_bJumpPending       = FALSE;
     s_bClearedAfterJump  = FALSE;
+#if (BOOT_DBG_ENABLE == 1u)
     s_u32DownloadCount   = 0u;
+#endif
     s_u32TickMs          = 0u;
 
     (void)memset(s_au8RxMailbox, 0, sizeof(s_au8RxMailbox));
@@ -172,7 +179,7 @@ void MODEM_I2cIrqHandler(void)
                     case REG_CTRL:
                         if (CTRL_COMMIT == u8Data)
                         {
-                            if (STATUS_IDLE == s_u8RegStatus)
+                            if (STATUS_IDLE == s_au8RegFile[REG_STATUS])
                             {
                                 s_bCtrlCommit = TRUE;
                             }
@@ -190,15 +197,16 @@ void MODEM_I2cIrqHandler(void)
                     default:
                         if ((s_u16SubAddr >= REG_MAILBOX_START) && (s_u16SubAddr <= REG_MAILBOX_END))
                         {
-                            if (STATUS_IDLE == s_u8RegStatus)
+                            if (STATUS_IDLE == s_au8RegFile[REG_STATUS])
                             {
                                 if (s_u16RxMailboxIdx < IAP_MAILBOX_SIZE)
                                 {
                                     s_au8RxMailbox[s_u16RxMailboxIdx++] = u8Data;
                                 }
                             }
-                            s_u16SubAddr++;
                         }
+                        /* else: non-MAILBOX writes (APP regs/reserved) — discard data */
+                        s_u16SubAddr++;
                         break;
                 }
             }
@@ -210,46 +218,22 @@ void MODEM_I2cIrqHandler(void)
     {
         uint8_t u8TxData = 0x00u;
 
-        switch (s_u16SubAddr)
+        if (s_u16SubAddr >= REG_MAILBOX_START)
         {
-            case REG_STATUS:
-                u8TxData = s_u8RegStatus;
-                break;
-
-            case REG_ERROR:
-                u8TxData = s_u8RegError;
-                break;
-
-            case REG_TX_LEN:
-                if (STATUS_RESP_READY == s_u8RegStatus)
-                {
-                    if (0u == s_u8TxLenByteIdx)
-                    {
-                        u8TxData         = (uint8_t)s_u16RegTxLen;
-                        s_u8TxLenByteIdx = 1u;
-                    }
-                    else
-                    {
-                        u8TxData = (uint8_t)(s_u16RegTxLen >> 8);
-                    }
-                }
-                break;
-
-            default:
-                if ((s_u16SubAddr >= REG_MAILBOX_START) && (s_u16SubAddr <= REG_MAILBOX_END))
-                {
-                    if (s_u16TxMailboxIdx < s_u16RegTxLen)
-                    {
-                        u8TxData = s_au8TxMailbox[s_u16TxMailboxIdx++];
-                    }
-                    else
-                    {
-                        u8TxData = 0x00u;
-                    }
-                    s_u16SubAddr++;
-                }
-                break;
+            /* MAILBOX: read with boundary check */
+            if (s_u16TxMailboxIdx < s_u16RegTxLen)
+            {
+                u8TxData = s_au8TxMailbox[s_u16TxMailboxIdx++];
+            }
         }
+        else
+        {
+            /* Register file 0x00~0x1F: direct lookup */
+            u8TxData = s_au8RegFile[s_u16SubAddr];
+        }
+
+        /* All readable registers auto-increment sub-addr for next sequential access */
+        s_u16SubAddr++;
 
         HSI2C_SlaveWriteData(HSI2C, u8TxData);
     }
@@ -259,8 +243,7 @@ void MODEM_I2cIrqHandler(void)
     {
         if (u32Flags & HSI2C_SLAVE_FLAG_SDF)
         {
-            s_bSubAddrValid      = FALSE;
-            s_u8TxLenByteIdx     = 0u;
+            s_bSubAddrValid = FALSE;
         }
         HSI2C->STAR = 0u;
     }
@@ -285,8 +268,8 @@ void MODEM_I2cIrqHandler(void)
  */
 static void MODEM_SetError(uint8_t u8ErrCode)
 {
-    s_u8RegStatus = STATUS_ERROR;
-    s_u8RegError  = u8ErrCode;
+    s_au8RegFile[REG_STATUS] = STATUS_ERROR;
+    s_au8RegFile[REG_ERROR]  = u8ErrCode;
 }
 
 /**
@@ -321,12 +304,21 @@ static void MODEM_BuildResponse(uint8_t u8Cmd, uint8_t u8Seq, uint8_t u8ErrCode,
     }
 
     u16CrcOffset = IAP_HEADER_SIZE + u16TotalPayloadLen;
-    u16Crc       = (uint16_t)HC32_CalCrc16(s_au8TxMailbox, 0u, u16CrcOffset);
 
-    s_au8TxMailbox[u16CrcOffset]     = (uint8_t)u16Crc;
+    /* Clamp to MAILBOX bounds — prevents out-of-write in ISR read path */
+    if (u16CrcOffset > IAP_MAILBOX_SIZE)
+    {
+        u16CrcOffset = IAP_MAILBOX_SIZE;
+    }
+
+    u16Crc = (uint16_t)HC32_CalCrc16(s_au8TxMailbox, 0u, u16CrcOffset);
+
+    s_au8TxMailbox[u16CrcOffset]      = (uint8_t)u16Crc;
     s_au8TxMailbox[u16CrcOffset + 1u] = (uint8_t)(u16Crc >> 8);
 
     s_u16RegTxLen    = u16CrcOffset + IAP_CRC_SIZE;
+    s_au8RegFile[REG_TX_LEN]      = (uint8_t)s_u16RegTxLen;
+    s_au8RegFile[REG_TX_LEN_HIGH] = (uint8_t)(s_u16RegTxLen >> 8);
     s_u16TxMailboxIdx = 0u; /* Reset read index for host read */
 }
 
@@ -344,7 +336,7 @@ en_result_t MODEM_Process(void)
         s_bCtrlCommit = FALSE;
 
         /* COMMIT is only valid in IDLE state */
-        if (STATUS_IDLE != s_u8RegStatus)
+        if (STATUS_IDLE != s_au8RegFile[REG_STATUS])
         {
             return OperationInProgress;
         }
@@ -400,8 +392,8 @@ en_result_t MODEM_Process(void)
         }
 
         /* Mark busy */
-        s_u8RegStatus = STATUS_BUSY;
-        s_u8RegError  = ERROR_CODE_OK;
+        s_au8RegFile[REG_STATUS] = STATUS_BUSY;
+        s_au8RegFile[REG_ERROR]  = ERROR_CODE_OK;
 
         uint8_t  u8Cmd  = s_au8RxMailbox[HDR_OFFSET_CMD];
         uint8_t  u8Seq  = s_au8RxMailbox[HDR_OFFSET_SEQ];
@@ -445,12 +437,12 @@ en_result_t MODEM_Process(void)
 
         if (ERROR_CODE_OK == stcResult.u8ErrCode)
         {
-            s_u8RegStatus = STATUS_RESP_READY;
+            s_au8RegFile[REG_STATUS] = STATUS_RESP_READY;
         }
         else
         {
-            s_u8RegStatus = STATUS_ERROR;
-            s_u8RegError  = stcResult.u8ErrCode;
+            s_au8RegFile[REG_STATUS] = STATUS_ERROR;
+            s_au8RegFile[REG_ERROR]  = stcResult.u8ErrCode;
         }
     }
 
@@ -458,15 +450,17 @@ en_result_t MODEM_Process(void)
     if (s_bCtrlClear)
     {
         s_bCtrlClear = FALSE;
-        if ((STATUS_RESP_READY == s_u8RegStatus) || (STATUS_ERROR == s_u8RegStatus))
+        if ((STATUS_RESP_READY == s_au8RegFile[REG_STATUS]) || (STATUS_ERROR == s_au8RegFile[REG_STATUS]))
         {
             if (s_bJumpPending)
             {
                 s_bClearedAfterJump = TRUE;
             }
-            s_u8RegStatus = STATUS_IDLE;
-            s_u8RegError  = ERROR_CODE_OK;
+            s_au8RegFile[REG_STATUS] = STATUS_IDLE;
+            s_au8RegFile[REG_ERROR]  = ERROR_CODE_OK;
             s_u16RegTxLen = 0u;
+            s_au8RegFile[REG_TX_LEN]      = 0u;
+            s_au8RegFile[REG_TX_LEN_HIGH] = 0u;
         }
     }
 
@@ -474,9 +468,11 @@ en_result_t MODEM_Process(void)
     if (s_bCtrlAbort)
     {
         s_bCtrlAbort        = FALSE;
-        s_u8RegStatus       = STATUS_IDLE;
-        s_u8RegError        = ERROR_CODE_OK;
+        s_au8RegFile[REG_STATUS]       = STATUS_IDLE;
+        s_au8RegFile[REG_ERROR]        = ERROR_CODE_OK;
         s_u16RegTxLen       = 0u;
+        s_au8RegFile[REG_TX_LEN]      = 0u;
+        s_au8RegFile[REG_TX_LEN_HIGH] = 0u;
         s_bJumpPending      = FALSE;
         s_bClearedAfterJump = FALSE;
     }
@@ -505,6 +501,7 @@ en_result_t MODEM_Process(void)
  * @param  [in] u32FlashAddr  Current write address
  * @retval None
  */
+#if (BOOT_DBG_ENABLE == 1u)
 static void CmdAppDownloadLog(uint32_t u32FlashAddr)
 {
     s_u32DownloadCount++;
@@ -512,6 +509,12 @@ static void CmdAppDownloadLog(uint32_t u32FlashAddr)
     HC32_DbgPutHex32(u32FlashAddr);
     BOOT_DBG_PRINT("\r\n");
 }
+#else
+static void CmdAppDownloadLog(uint32_t u32FlashAddr)
+{
+    (void)u32FlashAddr;
+}
+#endif
 
 /**
  * @brief  HANDSHAKE command handler

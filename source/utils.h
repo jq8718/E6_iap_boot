@@ -45,14 +45,14 @@ extern "C" {
 /*===================================================================
  *  I2C Slave Configuration
  *===================================================================*/
-#define I2C_SLAVE_ADDR (0x20u) /* 7-bit I2C slave address, configurable */
+#define I2C_SLAVE_ADDR (0x32u) /* 7-bit I2C slave address, configurable */
 
 /*===================================================================
  *  Debug Configuration
  *===================================================================*/
 /* Debug UART output via PA01 LPUART1_TXD (115200 8N1).
  * 0 = disabled (release build), 1 = enabled (debug build). */
-#define BOOT_DBG_ENABLE (1u)
+#define BOOT_DBG_ENABLE (0u)
 #if (BOOT_DBG_ENABLE == 1u)
     #define BOOT_DBG_PRINT(str)  do { HC32_DbgUartInit(); HC32_DbgPrint(str); } while (0)
 #else
@@ -117,14 +117,41 @@ extern "C" {
 #define FRAME_MAGIC1 (0xACu)
 
 /*===================================================================
- *  Virtual Register Addresses
+ *  Boot Firmware Version
  *===================================================================*/
-#define REG_STATUS        (0x00u) /* R  1B  Boot status */
-#define REG_ERROR         (0x01u) /* R  1B  Last error code */
-#define REG_CTRL          (0x02u) /* W  1B  Control command */
-#define REG_TX_LEN        (0x06u) /* R  2B  Response frame length */
-#define REG_MAILBOX_START (0x20u) /* R/W 530B  Data window start */
-#define REG_MAILBOX_END   (0x231u) /* R/W 530B  Data window end */
+#define BOOT_FW_VERSION       (0x0100u) /* Boot MCU firmware version (v1.0) */
+#define FW_VERSION_BOOT_MASK  (0x8000u) /* Boot identifier in REG_FW_VERSION_HIGH */
+
+/*===================================================================
+ *  Virtual Register Addresses — System
+ *===================================================================*/
+#define REG_STATUS            (0x00u) /* R  1B  Boot status */
+#define REG_ERROR             (0x01u) /* R  1B  Last error code */
+#define REG_CTRL              (0x02u) /* W  1B  Control command */
+#define REG_FW_VERSION_LOW    (0x04u) /* R  1B  Firmware version low byte */
+#define REG_FW_VERSION_HIGH   (0x05u) /* R  1B  Firmware version high byte (bit15=1 for Boot) */
+#define REG_TX_LEN            (0x06u) /* R  1B  Response frame length low byte */
+#define REG_TX_LEN_HIGH       (0x07u) /* R  1B  Response frame length high byte */
+#define REG_MAILBOX_START     (0x20u) /* R/W 530B  Data window start */
+#define REG_MAILBOX_END       (0x231u) /* R/W 530B  Data window end */
+
+/*===================================================================
+ *  Virtual Register Addresses — APP Specific
+ *  Boot reads return 0x00/0x0000, writes ignored.
+ *===================================================================*/
+#define REG_AIM_DELAY_LOW     (0x10u) /* R/W 1B  Aiming light on-delay (ms) low */
+#define REG_AIM_DELAY_HIGH    (0x11u) /* R/W 1B  Aiming light on-delay (ms) high */
+#define REG_AIM_DURATION_LOW  (0x12u) /* R/W 1B  Aiming light duration (ms) low */
+#define REG_AIM_DURATION_HIGH (0x13u) /* R/W 1B  Aiming light duration (ms) high */
+#define REG_FILL_DELAY_LOW    (0x14u) /* R/W 1B  Fill light on-delay (ms) low */
+#define REG_FILL_DELAY_HIGH   (0x15u) /* R/W 1B  Fill light on-delay (ms) high */
+#define REG_FILL_DURATION_LOW (0x16u) /* R/W 1B  Fill light duration (ms) low */
+#define REG_FILL_DURATION_HIGH (0x17u) /* R/W 1B  Fill light duration (ms) high */
+#define REG_SUM8_LIGHT        (0x18u) /* W  1B  SUM8 trigger light param update */
+#define REG_FRAME_RATE        (0x19u) /* R/W 1B  Frame rate */
+#define REG_EXPOSURE_LOW      (0x1Au) /* R/W 1B  Exposure time low */
+#define REG_EXPOSURE_HIGH     (0x1Bu) /* R/W 1B  Exposure time high */
+#define REG_SUM8_SENSOR       (0x1Cu) /* W  1B  SUM8 trigger sensor param update */
 
 /*===================================================================
  *  CTRL Register Values

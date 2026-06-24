@@ -4,6 +4,61 @@
 
 ---
 
+## 0. 芯片资源
+
+### 0.1 HC32L021 Flash 地址布局
+
+```
+总容量: 64KB (0x10000), 扇区大小 512B (0x200), 共 128 扇区
+```
+
+| 区域                 | 起始             | 结束                 | 大小                  | 扇区 |
+|---------------------|------------------|----------------------|-----------------------|--------|
+| **BOOT 区**         | `0x00000000`     | `0x00001FFF`         | 8KB `(0x2000)`        | 16 扇区 (0~15) |
+| └─ BOOT 程序        | `0x00000000`     | `0x00001DFF`         | 7.5KB `(0x1E00)`      | 15 扇区 (0~14) |
+| └─ **BOOT 参数区**  | **`0x00001E00`** | **`0x00001FFF`**     | **512B `(0x200)`**    | **1 扇区 (15)** |
+| **APP 区**          | **`0x00002000`** | **`0x0000FDFF`**     | **55.5KB `(0xDE00)`** | **111 扇区 (16~126)** |
+| 保留                | `0x0000FE00`      | `0x0000FFFF`        | 512B `(0x200)`        | 1 扇区 (127) |
+
+```c
+/* source/utils.h */
+#define FLASH_SECTOR_SIZE    (0x200u)                               /* 512B */
+#define FLASH_START_ADDR     ((uint32_t)0x00000000u)
+#define FLASH_SIZE           (FLASH_SECTOR_NUM * FLASH_SECTOR_SIZE)  /* 0x10000 = 64KB */
+#define BOOT_SIZE            (16u * FLASH_SECTOR_SIZE)               /* 0x2000 = 8KB */
+#define BOOT_PARAM_ADDR      (FLASH_START_ADDR + BOOT_SIZE - FLASH_SECTOR_SIZE)  /* 0x1E00 */
+#define APP_ADDR             (FLASH_START_ADDR + BOOT_SIZE)          /* 0x2000 */
+#define APP_MAX_SIZE         (FLASH_SIZE - BOOT_SIZE - FLASH_SECTOR_SIZE)         /* 0xDE00 = 56832 */
+```
+
+### 0.2 引脚配置
+
+| 功能 | 引脚 | 复用 | 方向 | 说明 |
+|------|------|------|------|------|
+| **HSI2C SDA** | PA06 | AF1: HSI2C_SDA | 开漏输出 | I2C 数据线，需外部上拉 |
+| **HSI2C SCL** | PA07 | AF1: HSI2C_SCL | 开漏输出 | I2C 时钟线，需外部上拉 |
+| **LPUART1 TX** | PA01 | AF1: LPUART1_TXD | 推挽输出 | 调试串口输出 (115200-8N1) |
+
+```c
+/* source/config_hc32l021.c — I2C 引脚初始化 */
+stcGpioInit.u32Pin       = GPIO_PIN_06 | GPIO_PIN_07;
+stcGpioInit.u32Mode      = GPIO_MD_OUTPUT_OD;  /* 开漏 */
+stcGpioInit.bOutputValue = TRUE;
+GPIOA_Init(&stcGpioInit);
+GPIO_PA06_AF_HSI2C_SDA();
+GPIO_PA07_AF_HSI2C_SCL();
+
+/* source/config_hc32l021.c — LPUART 引脚初始化 */
+GPIOA->OUT = GPIO_PIN_01;                      /* 预拉高 */
+stcGpioInit.u32Pin       = GPIO_PIN_01;
+stcGpioInit.u32Mode      = GPIO_MD_OUTPUT_PP;  /* 推挽 */
+stcGpioInit.bOutputValue = TRUE;
+GPIOA_Init(&stcGpioInit);
+GPIO_PA01_AF_LPUART1_TXD();
+```
+
+---
+
 ## 1. I2C 从机配置
 
 ### 1.1 硬件要求
@@ -12,7 +67,7 @@
 |------|------|------|
 | Sub-address | **1 字节** | `u8SubAddrSize = 1`，用于虚拟寄存器寻址 |
 | SCL Stall | **必须启用** | `TXDSTALL`, `RXSTALL`, `ACKSTALL` 全部使能 |
-| 从机地址 | 自定义 | 7-bit 或 10-bit，不与总线其他器件冲突 |
+| 从机地址 | `0x32` | 7-bit，不与总线其他器件冲突 |
 | 时钟源 | 系统时钟 | HC32L021 上电默认 4MHz → Boot 初始化后 48MHz |
 
 ### 1.2 SCL Clock Stretching 作用
@@ -40,23 +95,62 @@ Bootloader 作为 I2C 从机，通过 1 字节 sub-address 映射虚拟寄存器
 |------|------|------|--------|---------|------|
 | `0x00` | `REG_STATUS` | R | 1 | 主机读 | Boot 当前状态 |
 | `0x01` | `REG_ERROR` | R | 1 | 主机读 | 最近错误码 |
-| `0x02` | `REG_CTRL` | W | 1 | 主机写 | 控制命令（COMMIT/CLEAR/ABORT） |
-| `0x03`~`0x05` | *保留* | R | — | — | 读返回 `0x00`，写忽略 |
-| `0x06` | `REG_TX_LEN` | R | 2 LE | 主机读 | 响应帧长度（仅 `RESP_READY` 有效） |
-| `0x07`~`0x0F` | *保留* | R | — | — | 读返回 `0x00`，写忽略 |
-| `0x10`~`0x1F` | *保留* | R/W | — | — | 预留，当前无功能 |
+| `0x02` | `REG_CTRL` | W | 1 | 主机写 | 控制命令（COMMIT/CLEAR/ABORT） 读返回 `0x00`|
+| `0x03` | *保留* | R | 1 | — | 读返回 `0x00`，写忽略 |
+| `0x04` | `REG_FW_VERSION_LOW` | R | 1 | 主机读 | 固件版本低字节，APP/Boot 均支持 |
+| `0x05` | `REG_FW_VERSION_HIGH` | R | 1 | 主机读 | 固件版本高字节，bit15=1 标识 Boot，=0 标识 APP |
+| `0x06` | `REG_TX_LEN` | R | 1 | 主机读 | 响应帧长度低字节（仅 `RESP_READY` 有效） |
+| `0x07` | `REG_TX_LEN_HIGH` | R | 1 | 主机读 | 响应帧长度高字节 |
+| `0x08`~`0x0F` | *保留* | R | — | — | 读返回 `0x00`，写忽略 |
+| `0x10` | `REG_AIM_DELAY_LOW` | R/W | 1 | **APP** | 瞄准灯开启延时低字节，Boot 读返回 `0x00` |
+| `0x11` | `REG_AIM_DELAY_HIGH` | R/W | 1 | **APP** | 瞄准灯开启延时高字节，Boot 读返回 `0x00` |
+| `0x12` | `REG_AIM_DURATION_LOW` | R/W | 1 | **APP** | 瞄准灯开启时长低字节，Boot 读返回 `0x00` |
+| `0x13` | `REG_AIM_DURATION_HIGH` | R/W | 1 | **APP** | 瞄准灯开启时长高字节，Boot 读返回 `0x00` |
+| `0x14` | `REG_FILL_DELAY_LOW` | R/W | 1 | **APP** | 补光灯开启延时低字节，Boot 读返回 `0x00` |
+| `0x15` | `REG_FILL_DELAY_HIGH` | R/W | 1 | **APP** | 补光灯开启延时高字节，Boot 读返回 `0x00` |
+| `0x16` | `REG_FILL_DURATION_LOW` | R/W | 1 | **APP** | 补光灯开启时长低字节，Boot 读返回 `0x00` |
+| `0x17` | `REG_FILL_DURATION_HIGH` | R/W | 1 | **APP** | 补光灯开启时长高字节，Boot 读返回 `0x00` |
+| `0x18` | `REG_SUM8_LIGHT` | W | 1 | **APP** | SUM8 校验触发灯光参数更新，Boot 写忽略 |
+| `0x19` | `REG_FRAME_RATE` | R/W | 1 | **APP** | 帧率，Boot 读返回 `0x00` |
+| `0x1A` | `REG_EXPOSURE_LOW` | R/W | 1 | **APP** | 曝光时长低字节，Boot 读返回 `0x00` |
+| `0x1B` | `REG_EXPOSURE_HIGH` | R/W | 1 | **APP** | 曝光时长高字节，Boot 读返回 `0x00` |
+| `0x1C` | `REG_SUM8_SENSOR` | W | 1 | **APP** | SUM8 校验触发相机参数更新，Boot 写忽略 |
+| `0x1D`~`0x1F` | *保留* | R | 1 | — | 读返回 `0x00`，写忽略 |
 | `0x20`~`0x231` | `REG_MAILBOX` | W/R | 530 | 主机读写 | 请求帧写入 / 响应帧读取 |
+
+> **寄存器访问规则**：所有寄存器读写后 sub-address 自动 +1，支持单次 I2C 事务连续读取/写入相邻寄存器。
 
 **实现代码定义**（`source/utils.h`）：
 
 ```c
-/* 寄存器地址 */
-#define REG_STATUS        (0x00u)
-#define REG_ERROR         (0x01u)
-#define REG_CTRL          (0x02u)
-#define REG_TX_LEN        (0x06u)
-#define REG_MAILBOX_START (0x20u)
-#define REG_MAILBOX_END   (0x231u)
+/* 寄存器地址 — 系统 (Boot + APP) */
+#define REG_STATUS            (0x00u)
+#define REG_ERROR             (0x01u)
+#define REG_CTRL              (0x02u)
+#define REG_FW_VERSION_LOW    (0x04u)
+#define REG_FW_VERSION_HIGH   (0x05u)
+#define REG_TX_LEN            (0x06u)
+#define REG_TX_LEN_HIGH       (0x07u)
+#define REG_MAILBOX_START     (0x20u)
+#define REG_MAILBOX_END       (0x231u)
+
+/* 寄存器地址 — APP 专用 (Boot 读返回 0, 写忽略) */
+#define REG_AIM_DELAY_LOW     (0x10u)
+#define REG_AIM_DELAY_HIGH    (0x11u)
+#define REG_AIM_DURATION_LOW  (0x12u)
+#define REG_AIM_DURATION_HIGH (0x13u)
+#define REG_FILL_DELAY_LOW    (0x14u)
+#define REG_FILL_DELAY_HIGH   (0x15u)
+#define REG_FILL_DURATION_LOW (0x16u)
+#define REG_FILL_DURATION_HIGH (0x17u)
+#define REG_SUM8_LIGHT        (0x18u)
+#define REG_FRAME_RATE        (0x19u)
+#define REG_EXPOSURE_LOW      (0x1Au)
+#define REG_EXPOSURE_HIGH     (0x1Bu)
+#define REG_SUM8_SENSOR       (0x1Cu)
+
+/* 固件版本标识：Boot 读出时 bit15=1 */
+#define FW_VERSION_BOOT_MASK  (0x8000u)
 
 /* STATUS 值 */
 #define STATUS_IDLE       (0x00u)
@@ -737,12 +831,12 @@ S + SLA(W) + 0x20 + Sr + SLA(R) +
 ### 11.1 Flash 容量与地址
 
 ```
-FLASH_SIZE     = 64KB = 65536 bytes (0x0000 ~ 0xFFFF)
-BOOT_SIZE      =  8KB =  8192 bytes (0x0000 ~ 0x1FFF), 16 sectors
-BOOT_PARAM     =        512 bytes  (0x1E00 ~ 0x1FFF), boot 区域最后一扇区
+FLASH_SIZE     = 64KB = 65536 bytes (0x10000) 地址范围: 0x0000 ~ 0xFFFF
+BOOT_SIZE      =  8KB =  8192 bytes (0x2000)  地址范围: 0x0000 ~ 0x1FFF, 16 sectors
+BOOT_PARAM     =        512 bytes  (0x200)    地址范围: 0x1E00 ~ 0x1FFF, boot 区域最后一扇区
 APP_ADDR       = 0x2000
 APP_MAX_SIZE   = FLASH_SIZE - BOOT_SIZE - FLASH_SECTOR_SIZE
-               = 65536 - 8192 - 512 = 56832 bytes ≈ 55.5KB
+               = 65536 - 8192 - 512 = 56832 bytes (0xDE00) ≈ 55.5KB
                = 111 个扇区
 ```
 
